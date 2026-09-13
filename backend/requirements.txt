@@ -1,0 +1,18 @@
+# Limo Backend - Pinned Core Dependencies
+fastapi==0.115.8
+uvicorn[standard]==0.34.0
+pydantic==2.10.6
+pydantic-settings==2.7.1
+python-multipart==0.0.20
+
+# Pinned Development & Testing Dependencies
+pytest==8.3.4
+pytest-asyncio==0.25.3
+httpx==0.28.1
+
+# Document & Media Extraction (D5)
+python-docx==1.2.0
+pypdf==6.18.1
+pdfplumber==0.11.10
+openpyxl==3.1.5
+beautifulsoup4==4.15.0

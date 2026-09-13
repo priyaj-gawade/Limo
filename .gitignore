@@ -1,0 +1,50 @@
+# Environment & Secrets (NEVER stage real credentials)
+.env
+.env.*
+*.env
+!.env.example
+
+# Local SQLite databases & runtime storage data
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/
+backend/data/
+
+# Python virtual environments, bytecode & test caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+backend/.pytest_cache/
+.venv/
+backend/.venv/
+venv/
+*.egg-info/
+
+# Node dependencies, build outputs & caches
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+out/
+**/out/
+.vite/
+**/.vite/
+
+# Rust native compiler artifacts (GenOffice xlsx-engine)
+target/
+**/target/
+
+# Excluded third-party external repositories (per instruction: only GenOffice goes to GitHub)
+external/claude-code/
+external/MoneyPrinterTurbo/
+external/OpenMontage/
+
+# Logs, temporary files, and system artifacts
+*.log
+temp/
+**/temp/
+.DS_Store
+Thumbs.db
