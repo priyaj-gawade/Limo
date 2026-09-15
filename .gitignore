@@ -41,7 +41,8 @@ test_artifacts/
 *_test.py
 test_*.py
 verify_*.py
-scripts/**
+/scripts/
+/scripts/**
 .pytest_cache/
 **/.pytest_cache/**
 coverage/
@@ -68,12 +69,15 @@ docs/**
 *.jpeg
 *.gif
 !frontend/src/assets/**
+!external/GenOffice/packages/ui/src/fonts/**
 scratch/
 **/scratch/**
 projects/
 **/projects/**
 renders/
 **/renders/**
+backlot/
+**/backlot/**
 atlas-map.md
 
 # 6. Python Environment & Bytecode Caches
@@ -105,13 +109,11 @@ out/
 target/
 **/target/**
 
-# 9. Third-Party External Repositories (claude-code, MoneyPrinterTurbo, OpenMontage)
+# 9. Third-Party External Repositories
 external/claude-code/
 external/claude-code/**
 external/MoneyPrinterTurbo/
 external/MoneyPrinterTurbo/**
-external/OpenMontage/
-external/OpenMontage/**
 
 # 10. IDE, OS & System Temp Files
 .DS_Store
@@ -127,6 +129,13 @@ tmp/
 **/tmp/**
 .agents/
 **/.agents/**
+.claude/
+**/.claude/**
+.codex/
+**/.codex/**
+.cursor/
+**/.cursor/**
+.windsurfrules
 .system_generated/
 **/.system_generated/**
 .gemini/
