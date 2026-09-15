@@ -184,7 +184,12 @@ export const App: React.FC = () => {
   };
 
   // Real backend agent turn execution connecting UI to LimoAgentRuntime and Gemini LLM
-  const handleSend = async (text: string, attachments: AttachmentFile[], speed: ModelSpeed) => {
+  const handleSend = async (
+    text: string,
+    attachments: AttachmentFile[],
+    speed: ModelSpeed,
+    voiceConfig?: { provider: string; voice_id: string; speed?: number }
+  ) => {
     let targetSessionId = activeSessionId;
     const tempUserMsg: ChatMessage = {
       id: `temp-${Date.now()}`,
@@ -242,10 +247,24 @@ export const App: React.FC = () => {
 
     setIsGenerating(true);
     try {
+      const turnPayload = {
+        content: text,
+        mode: activeMode,
+        attachments: attachments.map((a) => ({
+          id: a.id,
+          name: a.name,
+          size_bytes: a.size,
+          mime_type: a.type,
+          source_id: a.sourceId || null,
+        })),
+        source_ids: attachments.map((a) => a.sourceId).filter(Boolean) as string[],
+        voice_config: voiceConfig || null,
+      };
+
       const turnRes = await fetch(`/api/v1/chats/${targetSessionId}/turn`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: text, mode: activeMode }),
+        body: JSON.stringify(turnPayload),
       });
 
       if (turnRes.ok) {

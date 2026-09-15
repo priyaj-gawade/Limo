@@ -22,6 +22,7 @@ from .adapters.base import BaseNativeAdapter
 from .adapters.infographic_adapter import NativeInfographicAdapter
 from .adapters.markdown_adapter import NativeHtmlAdapter, NativeMarkdownAdapter
 from .adapters.social_adapter import NativeSocialAdapter
+from .adapters.video_adapter import OpenMontageVideoAdapter
 from .contracts import generation_contract_builder
 
 logger = logging.getLogger("limo.services.transformation.engine_router")
@@ -83,9 +84,9 @@ class EngineRouter:
             format=OutputFormat.VIDEO,
             engine_type=EngineType.VIDEO_ENGINE,
             target_extension=".mp4",
-            is_implemented=False,
-            target_phase="D8 (Video Engine)",
-            dispatch_endpoint="/api/v1/video/synthesize",
+            is_implemented=True,
+            target_phase="D8.2 (Video Engine)",
+            dispatch_endpoint=None,
         ),
         OutputFormat.LINKEDIN: EngineRoute(
             format=OutputFormat.LINKEDIN,
@@ -127,20 +128,30 @@ class EngineRouter:
             target_phase="D6.3 (Native Adapters)",
             dispatch_endpoint=None,
         ),
+        OutputFormat.AUDIO: EngineRoute(
+            format=OutputFormat.AUDIO,
+            engine_type=EngineType.TTS_ENGINE,
+            target_extension=".mp3",
+            is_implemented=True,
+            target_phase="D8.3 (TTS & Voice Layer)",
+            dispatch_endpoint=None,
+        ),
     }
 
     def __init__(self):
-        # Instantiate singleton adapters for native formats
+        # Instantiate singleton adapters for native formats and video
         self._markdown_adapter = NativeMarkdownAdapter()
         self._html_adapter = NativeHtmlAdapter()
         self._social_adapter = NativeSocialAdapter()
         self._infographic_adapter = NativeInfographicAdapter()
-        self._native_adapters: Dict[OutputFormat, BaseNativeAdapter] = {
+        self._video_adapter = OpenMontageVideoAdapter()
+        self._native_adapters: Dict[OutputFormat, Any] = {
             OutputFormat.MARKDOWN: self._markdown_adapter,
             OutputFormat.HTML: self._html_adapter,
             OutputFormat.LINKEDIN: self._social_adapter,
             OutputFormat.TWITTER: self._social_adapter,
             OutputFormat.INFOGRAPHIC: self._infographic_adapter,
+            OutputFormat.VIDEO: self._video_adapter,
         }
 
     def get_route(self, fmt: OutputFormat) -> EngineRoute:
@@ -155,13 +166,13 @@ class EngineRouter:
                 )
         return self.ROUTING_TABLE[fmt].model_copy()
 
-    def get_native_adapter(self, fmt: OutputFormat) -> BaseNativeAdapter:
+    def get_native_adapter(self, fmt: OutputFormat) -> Any:
         """Return the concrete native adapter instance for a supported native format."""
         adapter = self._native_adapters.get(fmt)
         if not adapter:
             raise UnsupportedFormatError(
                 raw_format=fmt.value,
-                supported_formats=["markdown", "html", "linkedin", "twitter", "infographic"],
+                supported_formats=["markdown", "html", "linkedin", "twitter", "infographic", "video"],
             )
         return adapter
 
@@ -225,10 +236,11 @@ class EngineRouter:
                 session_id=session_id,
             )
         elif route.engine_type == EngineType.VIDEO_ENGINE:
-            return generation_contract_builder.build_video_payload(
+            return generation_contract_builder.build_video_generation_contract(
                 canonical=canonical,
                 deliverable=deliverable,
                 config=config,
+                job_id=session_id or deliverable.deliverable_id,
             )
         else:
             # Native deliverable preview/contract

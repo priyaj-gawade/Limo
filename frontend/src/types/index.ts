@@ -10,6 +10,7 @@ export type FeatureMode =
   | 'slides'
   | 'sheets'
   | 'video'
+  | 'audio'
   | 'websites'
   | 'code';
 
@@ -21,6 +22,9 @@ export interface AttachmentFile {
   size: number;
   type: string;
   url?: string;
+  sourceId?: string;
+  uploadStatus?: 'uploading' | 'done' | 'error';
+  error?: string;
 }
 
 export type ArtifactType = 
@@ -28,8 +32,27 @@ export type ArtifactType =
   | 'slide' 
   | 'sheet' 
   | 'video' 
+  | 'audio'
   | 'website'
   | 'code';
+
+export interface VoiceOption {
+  provider: string;
+  voice_id: string;
+  display_name: string;
+  language: string;
+  gender?: string;
+  description?: string;
+  is_default?: boolean;
+  is_available?: boolean;
+  is_configured_default?: boolean;
+}
+
+export interface VoiceCatalogResponse {
+  default_provider: string;
+  default_voice: string;
+  voices: VoiceOption[];
+}
 
 export interface Artifact {
   id: string;

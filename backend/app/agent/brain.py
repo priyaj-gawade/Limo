@@ -10,7 +10,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from .actions import ActionType, AgentAction, ToolCallPayload
-from .context import AgentContext
+from .context import AgentContext, ContextSelector, SelectedContext
 from .contracts import BaseTool
 from .llm.manager import LLMProviderManager, llm_provider_manager
 
@@ -56,7 +56,11 @@ class LLMReasoningEngine(ReasoningEngine):
             return f"{guidelines}\n\n## Active Skill Instructions:\n{context.skill_instructions}"
         return guidelines
 
-    def _build_prompt(self, context: AgentContext) -> str:
+    def _build_prompt(
+        self,
+        context: AgentContext,
+        selected_context: Optional[SelectedContext] = None,
+    ) -> str:
         """Format conversational history, scratchpad observations, and user request into a single prompt."""
         parts = []
 
@@ -73,6 +77,14 @@ class LLMReasoningEngine(ReasoningEngine):
             for obs in context.observations:
                 status = "SUCCESS" if obs.result.success else "FAILED"
                 parts.append(f"Tool [{obs.tool_name}] -> {status}: {obs.result.output}")
+
+        # Selected attached inputs or source excerpts
+        if selected_context and selected_context.prompt_context_snippet:
+            parts.append(f"\n{selected_context.prompt_context_snippet}")
+        elif context.source_excerpts:
+            parts.append("\n### Relevant Source Context:")
+            for exc in context.source_excerpts[:3]:
+                parts.append(f"- Source [{exc.name}]: {exc.snippet}")
 
         # Current user request
         parts.append(f"\nUser: {context.user_request}")
@@ -92,8 +104,10 @@ class LLMReasoningEngine(ReasoningEngine):
     async def decide(self, context: AgentContext, available_tools: List[BaseTool]) -> AgentAction:
         """Invoke LLMProviderManager with formatted prompt and registered tool declarations."""
         system_instruction = self._build_system_instruction(context)
-        prompt = self._build_prompt(context)
+        selected = ContextSelector.select(context.unified_input)
+        prompt = self._build_prompt(context, selected_context=selected)
         tools_declarations = self._build_tools_declarations(available_tools) if available_tools else None
+        media_parts = selected.media_parts if selected.media_parts else None
 
         try:
             response = await self.provider_manager.generate(
@@ -101,6 +115,7 @@ class LLMReasoningEngine(ReasoningEngine):
                 system_instruction=system_instruction,
                 tools_declarations=tools_declarations,
                 temperature=self.temperature,
+                media_parts=media_parts,
             )
 
             # Check for function calls

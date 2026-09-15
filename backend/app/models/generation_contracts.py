@@ -63,6 +63,100 @@ class VideoEnginePayload(LimoBaseModel):
     canonical_hash: str = Field(min_length=64, max_length=64, description="Cryptographic SHA-256 hash of CanonicalContent")
 
 
+class VideoVoiceConfig(LimoBaseModel):
+    """Per-job TTS audio narration configuration."""
+    provider: str = Field(default="edge_tts", description="TTS audio engine provider (edge_tts)")
+    voice_id: str = Field(default="en-US-AndrewMultilingualNeural", description="Specific voice identifier")
+    speed: float = Field(default=1.0, ge=0.5, le=2.0, description="Narration playback speed multiplier")
+    pitch: float = Field(default=0.0, ge=-50.0, le=50.0, description="Voice pitch adjustment in Hz or semitones")
+
+
+class VideoScriptSection(LimoBaseModel):
+    """Discrete timeline section or scene for video generation."""
+    section_id: str = Field(description="Unique scene/section identifier")
+    heading: str = Field(default="", description="Section heading or theme")
+    content: str = Field(description="Spoken narration content")
+    visual_hint: str = Field(default="", description="Visual keyword or prompt for asset acquisition")
+    duration_seconds: Optional[float] = Field(default=None, description="Optional scene duration constraint")
+
+
+class CaptionUnit(LimoBaseModel):
+    """Discrete, timed caption display unit adhering to the <=3-word hard rule (Phase D8.4)."""
+    text: str = Field(description="Spoken caption text (at most 3 words)")
+    start_time: float = Field(ge=0.0, description="Start timestamp in seconds")
+    end_time: float = Field(ge=0.0, description="End timestamp in seconds")
+    treatment: Literal["drop", "rail", "embed"] = Field(default="rail", description="Caption treatment doctrine")
+    emphasis: List[str] = Field(default_factory=list, description="Keywords for inline emphasis")
+    scene_id: Optional[str] = Field(default=None, description="Originating scene ID")
+    timing_source: str = Field(default="phrase_proportional", description="Timing provenance")
+
+    @field_validator("text")
+    @classmethod
+    def validate_word_limit(cls, v: str) -> str:
+        words = v.strip().split()
+        if len(words) > 3:
+            raise ValueError(f"Caption display unit must contain at most 3 words, got {len(words)}: '{v}'")
+        if len(words) == 0:
+            raise ValueError("Caption display unit cannot be empty")
+        return v
+
+
+def validate_caption_word_limit(captions: List[CaptionUnit]) -> None:
+    """Validate that every visible caption unit contains AT MOST 3 words.
+
+    Raises ValueError if any caption unit exceeds 3 words or has invalid duration.
+    """
+    for idx, cue in enumerate(captions):
+        if cue.treatment == "drop":
+            continue
+        words = cue.text.strip().split()
+        if len(words) > 3:
+            raise ValueError(
+                f"Caption word limit violation at caption {idx} ({cue.start_time:.2f}s - {cue.end_time:.2f}s): "
+                f"expected at most 3 words, got {len(words)} words: '{cue.text}'"
+            )
+        if len(words) == 0:
+            raise ValueError(f"Caption {idx} has empty text.")
+        if cue.end_time < cue.start_time:
+            raise ValueError(f"Caption {idx} has invalid duration: start={cue.start_time:.3f}s, end={cue.end_time:.3f}s")
+
+
+
+class VideoBrief(LimoBaseModel):
+    """Sanitized creative specification produced by Limo for the OpenMontage Director Agent.
+
+    CRITICAL ARCHITECTURAL BOUNDARY:
+    This model intentionally excludes raw user directives or commands.
+    It contains only sanitized creative parameters, preventing narration leakage at the root.
+    """
+    topic: str = Field(description="Sanitized subject or theme, free of commands (e.g. 'Deep Space Exploration')")
+    target_duration_seconds: float = Field(default=30.0, ge=8.0, le=300.0, description="Target video runtime in seconds")
+    aspect_ratio: str = Field(default="16:9", description="Video format ('16:9', '9:16', '1:1')")
+    audience: str = Field(default="general audience", description="Target viewer demographic")
+    tone: str = Field(default="inspirational, educational", description="Narrative delivery tone")
+    language: str = Field(default="en", description="Narration language code")
+    key_points: List[str] = Field(default_factory=list, description="Sanitized bullet points to guide scene narrative")
+    voice_config: VideoVoiceConfig = Field(default_factory=VideoVoiceConfig, description="TTS voice parameters")
+
+
+class VideoGenerationContract(LimoBaseModel):
+    """Authoritative contract passed across subprocess boundary to OpenMontage runner."""
+    job_id: str = Field(description="Unique sanitized job identifier")
+    title: str = Field(description="Deliverable video title")
+    conversation_id: Optional[str] = Field(default=None, description="Originating chat session or conversation ID")
+    topic: Optional[str] = Field(default=None, description="Core topic or narrative premise")
+    target_duration_seconds: float = Field(default=30.0, ge=8.0, le=300.0, description="Target video runtime in seconds")
+    aspect_ratio: str = Field(default="16:9", description="Video format ('16:9', '9:16', '1:1')")
+    style_playbook: str = Field(default="clean-professional", description="Visual style template")
+    render_runtime: str = Field(default="ffmpeg", description="Rendering composition engine")
+    voice_config: VideoVoiceConfig = Field(default_factory=VideoVoiceConfig, description="TTS voice parameters")
+    subtitles: bool = Field(default=True, description="Whether subtitles are generated")
+    script_sections: List[VideoScriptSection] = Field(default_factory=list, description="Pre-planned script sections")
+    brief: Optional[VideoBrief] = Field(default=None, description="Sanitized creative Video Brief")
+    user_directive: Optional[str] = Field(default=None, description="Raw input directive kept strictly for job provenance outside creative prompt")
+    options: Dict[str, Any] = Field(default_factory=dict, description="Stock provider and engine options")
+
+
 class TweetItem(LimoBaseModel):
     """Single tweet within an X/Twitter thread, strictly bounded to 280 characters."""
     tweet_number: int = Field(ge=1, description="Monotonic sequence number within the thread (1/N)")

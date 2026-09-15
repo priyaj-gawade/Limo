@@ -154,6 +154,7 @@ class LLMProviderManager:
         estimated_input_tokens: int = 500,
         response_mime_type: Optional[str] = None,
         response_schema: Optional[Any] = None,
+        media_parts: Optional[List[Dict[str, Any]]] = None,
     ) -> LLMResponse:
         """Execute a resilient LLM inference call with preflight scheduling, retry, and failover.
         
@@ -203,6 +204,7 @@ class LLMProviderManager:
                     timeout_sec=self.timeout_sec,
                     response_mime_type=response_mime_type,
                     response_schema=response_schema,
+                    media_parts=media_parts,
                 )
 
                 # 3. Success: Record usage with input/output token distinction (MUST-FIX #5)

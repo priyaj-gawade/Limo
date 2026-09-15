@@ -18,6 +18,7 @@ class TransformationEventType(StrEnum):
     JOB_CREATED = "job.created"
     JOB_STARTED = "job.started"
     TASK_STARTED = "task.started"
+    TASK_PROGRESS = "task.progress"
     TASK_COMPLETED = "task.completed"
     ARTIFACT_CREATED = "artifact.created"
     TASK_FAILED = "task.failed"

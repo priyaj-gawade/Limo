@@ -6,7 +6,12 @@ import { FeatureMode, ModelSpeed, AttachmentFile } from '../types';
 interface HomeScreenProps {
   activeMode: FeatureMode;
   onSelectMode: (mode: FeatureMode) => void;
-  onSend: (text: string, attachments: AttachmentFile[], speed: ModelSpeed) => void;
+  onSend: (
+    text: string,
+    attachments: AttachmentFile[],
+    speed: ModelSpeed,
+    voiceConfig?: { provider: string; voice_id: string; speed?: number }
+  ) => void;
   initialPrompt?: string;
 }
 

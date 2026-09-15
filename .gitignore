@@ -1,50 +1,133 @@
-# Environment & Secrets (NEVER stage real credentials)
+# ==============================================================================
+# Limo Repository .gitignore
+# ==============================================================================
+
+# 1. Environment & Credentials (NEVER commit secrets, tokens, or private keys)
 .env
 .env.*
 *.env
 !.env.example
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
 
-# Local SQLite databases & runtime storage data
+# 2. Local Databases & Sandboxed Data Storage
 *.db
 *.db-journal
 *.sqlite
 *.sqlite3
 data/
-backend/data/
+**/data/**
+backend/data/**
 
-# Python virtual environments, bytecode & test caches
+# 3. Tests, Test Runners & Test Artifacts (Per Push Policy)
+tests/
+tests/**
+**/tests/
+**/tests/**
+backend/tests/
+backend/tests/**
+test-artifacts/
+**/test-artifacts/**
+test_artifacts/
+**/test_artifacts/**
+**/__tests__/**
+*.test.ts
+*.test.tsx
+*.test.js
+*.test.py
+*_test.py
+test_*.py
+verify_*.py
+scripts/**
+.pytest_cache/
+**/.pytest_cache/**
+coverage/
+**/coverage/**
+.nyc_output/
+
+# 4. Documentation & Specifications (Per Push Policy)
+docs/
+docs/**
+**/docs/
+**/docs/**
+
+# 5. Generated Media, Renders & Scratch Workspace
+*.mp4
+*.webp
+*.mov
+*.avi
+*.mkv
+*.mp3
+*.wav
+*.ogg
+*.png
+*.jpg
+*.jpeg
+*.gif
+!frontend/src/assets/**
+scratch/
+**/scratch/**
+projects/
+**/projects/**
+renders/
+**/renders/**
+atlas-map.md
+
+# 6. Python Environment & Bytecode Caches
 __pycache__/
+**/__pycache__/**
 *.py[cod]
 *$py.class
-.pytest_cache/
-backend/.pytest_cache/
 .venv/
-backend/.venv/
+**/.venv/**
 venv/
+**/venv/**
+env/
 *.egg-info/
-
-# Node dependencies, build outputs & caches
-node_modules/
-**/node_modules/
+*.egg
 dist/
-**/dist/
-out/
-**/out/
+**/dist/**
+build/
+**/build/**
+
+# 7. Node Dependencies, Caches & Bundles
+node_modules/
+**/node_modules/**
 .vite/
-**/.vite/
+**/.vite/**
+out/
+**/out/**
 
-# Rust native compiler artifacts (GenOffice xlsx-engine)
+# 8. Rust / Native Compiler Targets
 target/
-**/target/
+**/target/**
 
-# Excluded third-party external repositories (per instruction: only GenOffice goes to GitHub)
+# 9. Third-Party External Repositories (claude-code, MoneyPrinterTurbo, OpenMontage)
 external/claude-code/
+external/claude-code/**
 external/MoneyPrinterTurbo/
+external/MoneyPrinterTurbo/**
 external/OpenMontage/
+external/OpenMontage/**
 
-# Logs, temporary files, and system artifacts
-*.log
-temp/
-**/temp/
+# 10. IDE, OS & System Temp Files
 .DS_Store
 Thumbs.db
+.idea/
+**/.idea/**
+.vscode/
+**/.vscode/**
+*.log
+temp/
+**/temp/**
+tmp/
+**/tmp/**
+.agents/
+**/.agents/**
+.system_generated/
+**/.system_generated/**
+.gemini/
+**/.gemini/**

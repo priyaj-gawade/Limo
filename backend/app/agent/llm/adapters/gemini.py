@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
 from google import genai
@@ -45,6 +46,7 @@ class GeminiAdapter(BaseProviderAdapter):
         timeout_sec: float = 30.0,
         response_mime_type: Optional[str] = None,
         response_schema: Optional[Any] = None,
+        media_parts: Optional[List[Dict[str, Any]]] = None,
         **kwargs: Any,
     ) -> LLMResponse:
         """Call official Google GenAI SDK generate_content with error mapping."""
@@ -69,12 +71,31 @@ class GeminiAdapter(BaseProviderAdapter):
 
         config = types.GenerateContentConfig(**config_kwargs)
 
+        # Build multimodal contents if native media parts are provided
+        call_contents: Any = prompt
+        if media_parts:
+            contents_list: List[Any] = []
+            for part_info in media_parts:
+                data = part_info.get("data")
+                mime_type = part_info.get("mime_type", "image/jpeg")
+                file_path = part_info.get("file_path")
+                if data and isinstance(data, bytes):
+                    contents_list.append(types.Part.from_bytes(data=data, mime_type=mime_type))
+                elif file_path and os.path.exists(file_path):
+                    with open(file_path, "rb") as f:
+                        file_bytes = f.read()
+                    contents_list.append(types.Part.from_bytes(data=file_bytes, mime_type=mime_type))
+
+            if contents_list:
+                contents_list.append(prompt)
+                call_contents = contents_list
+
         try:
             # Enforce async timeout
             response = await asyncio.wait_for(
                 client.aio.models.generate_content(
                     model=model_name,
-                    contents=prompt,
+                    contents=call_contents,
                     config=config,
                 ),
                 timeout=timeout_sec,

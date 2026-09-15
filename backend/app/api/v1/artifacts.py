@@ -1,9 +1,13 @@
-"""Artifacts REST API router."""
-
 import inspect
 import mimetypes
-from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Query, Response, status
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+from typing import Any, Dict, Generator, List, Optional
+from fastapi import APIRouter, Header, Query, Response, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ...exceptions import BadRequestError, EntityNotFoundError
@@ -13,6 +17,53 @@ from ...models.provenance import CitationVerification, ProvenanceRecord, Validat
 from ...services.artifact_service import artifact_service
 
 router = APIRouter(prefix="/artifacts", tags=["Artifacts"])
+
+
+def _iter_file_range(file_path: str, start: int, end: int, chunk_size: int = 64 * 1024) -> Generator[bytes, None, None]:
+    """Yield file chunks within specified [start, end] byte range (inclusive)."""
+    with open(file_path, "rb") as f:
+        f.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            read_len = min(chunk_size, remaining)
+            data = f.read(read_len)
+            if not data:
+                break
+            remaining -= len(data)
+            yield data
+
+
+def _extract_video_poster(video_path: Path, duration: float = 3.0) -> Optional[bytes]:
+    """Resilient multi-tier poster frame extraction via ffmpeg:
+    1. Try t=0.5s.
+    2. Fallback to min(0.1s, max(0.01s, duration - 0.05s)).
+    3. Fallback to first frame (0.0s).
+    """
+    attempts = [
+        ["-ss", "00:00:00.500"],
+        ["-ss", f"{max(0.01, min(0.1, duration - 0.05)):.3f}"],
+        [],  # frame 0 fallback
+    ]
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+
+    try:
+        for ss_args in attempts:
+            cmd = ["ffmpeg", "-y"] + ss_args + ["-i", str(video_path), "-frames:v", "1", "-q:v", "2", str(tmp_path)]
+            try:
+                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if tmp_path.is_file() and tmp_path.stat().st_size > 0:
+                    return tmp_path.read_bytes()
+            except Exception:
+                continue
+    finally:
+        if tmp_path.is_file():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+    return None
 
 
 class RegisterArtifactRequest(BaseModel):
@@ -109,20 +160,113 @@ async def download_artifact(artifact_id: str) -> Response:
     )
 
 
+@router.get("/{artifact_id}/stream")
+async def stream_artifact(
+    artifact_id: str,
+    range_header: Optional[str] = Header(None, alias="Range"),
+) -> Response:
+    """Stream deliverable with HTTP 206 Partial Content Range support for smooth seeking."""
+    artifact = artifact_service.get_artifact(artifact_id)
+    try:
+        file_path = artifact_service.storage.safe_resolve(artifact.storage_ref)
+    except Exception:
+        raise EntityNotFoundError("Artifact file", artifact_id)
+
+    if not file_path.is_file():
+        raise EntityNotFoundError("Artifact file", artifact_id)
+
+    file_size = file_path.stat().st_size
+    media_type, _ = mimetypes.guess_type(file_path.name)
+    if not media_type:
+        media_type = "video/mp4" if artifact.artifact_type == ArtifactType.VIDEO else "application/octet-stream"
+
+    filename = f"{artifact.title.replace(' ', '_')}{artifact.file_format}"
+
+    if range_header:
+        # Match "bytes=start-end" or "bytes=start-" or "bytes=-suffix"
+        range_match = re.match(r"^bytes=(\d*)-(\d*)$", range_header.strip())
+        if range_match:
+            start_str, end_str = range_match.groups()
+            if start_str and end_str:
+                start = int(start_str)
+                end = int(end_str)
+            elif start_str:
+                start = int(start_str)
+                end = file_size - 1
+            elif end_str:
+                start = max(0, file_size - int(end_str))
+                end = file_size - 1
+            else:
+                start = 0
+                end = file_size - 1
+
+            if start >= file_size or end < start:
+                return Response(
+                    status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                    headers={"Content-Range": f"bytes */{file_size}"},
+                )
+
+            end = min(end, file_size - 1)
+            content_length = end - start + 1
+            headers = {
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(content_length),
+                "Content-Disposition": f'inline; filename="{filename}"',
+            }
+            return StreamingResponse(
+                _iter_file_range(str(file_path), start, end),
+                status_code=status.HTTP_206_PARTIAL_CONTENT,
+                media_type=media_type,
+                headers=headers,
+            )
+
+    # If no valid Range header, return 200 with Accept-Ranges
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(file_size),
+        "Content-Disposition": f'inline; filename="{filename}"',
+    }
+    return StreamingResponse(
+        _iter_file_range(str(file_path), 0, file_size - 1),
+        status_code=status.HTTP_200_OK,
+        media_type=media_type,
+        headers=headers,
+    )
+
+
 @router.get("/{artifact_id}/thumbnail")
 async def get_artifact_thumbnail(artifact_id: str) -> Response:
     """Stream rendered page thumbnail for an artifact."""
     artifact = artifact_service.get_artifact(artifact_id)
     thumb_ref = artifact.metadata.get("thumbnail_storage_ref") or f"artifacts/{artifact_id}/thumbnail.png"
-    if not artifact_service.storage.file_exists(thumb_ref):
-        raise EntityNotFoundError("Thumbnail", artifact_id)
+    if artifact_service.storage.file_exists(thumb_ref):
+        thumb_bytes = artifact_service.storage.read_file(thumb_ref)
+        return Response(
+            content=thumb_bytes,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
 
-    thumb_bytes = artifact_service.storage.read_file(thumb_ref)
-    return Response(
-        content=thumb_bytes,
-        media_type="image/png",
-        headers={"Cache-Control": "public, max-age=3600"},
-    )
+    # For video artifacts, if thumbnail is missing, dynamically extract and save it
+    if artifact.artifact_type == ArtifactType.VIDEO:
+        try:
+            video_path = artifact_service.storage.safe_resolve(artifact.storage_ref)
+            if video_path.is_file():
+                duration = float(artifact.metadata.get("duration", 3.0))
+                extracted_bytes = _extract_video_poster(video_path, duration=duration)
+                if extracted_bytes:
+                    saved_ref = artifact_service.storage.save_bytes(extracted_bytes, f"artifacts/{artifact_id}/thumbnail.png")
+                    artifact_service.update_artifact_metadata(artifact_id, {"thumbnail_storage_ref": saved_ref})
+                    return Response(
+                        content=extracted_bytes,
+                        media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=3600"},
+                    )
+        except Exception:
+            pass
+
+    raise EntityNotFoundError("Thumbnail", artifact_id)
 
 
 @router.post("/{artifact_id}/open")

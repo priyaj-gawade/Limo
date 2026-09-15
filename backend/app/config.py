@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     llm_safety_margin: float = 0.9
     default_retrieval_token_budget: int = 2000
 
+    # TTS & Voice Layer Configuration (Phase D8.3)
+    default_tts_provider: str = "azure"
+    default_tts_voice: str = "en-US-AndrewMultilingualNeural"
+
     # Logging
     log_level: str = "INFO"
 

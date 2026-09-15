@@ -132,6 +132,14 @@ class ArtifactService:
                 raise EntityNotFoundError("Artifact", artifact_id)
             return artifact
 
+    def update_artifact_metadata(self, artifact_id: str, metadata: Dict[str, Any]) -> bool:
+        """Update artifact metadata in SQLite."""
+        with get_connection(self.db_path) as conn:
+            artifact = ArtifactRepository.get_artifact(conn, artifact_id)
+            if not artifact:
+                raise EntityNotFoundError("Artifact", artifact_id)
+            return ArtifactRepository.update_artifact_metadata(conn, artifact_id, metadata)
+
     def list_artifacts(
         self,
         project_id: Optional[str] = None,

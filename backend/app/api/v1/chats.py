@@ -95,6 +95,9 @@ class ExecuteTurnRequest(BaseModel):
     content: str = Field(min_length=1, description="User prompt text")
     mode: Optional[FeatureMode] = Field(default=None)
     project_id: Optional[str] = Field(default=None)
+    attachments: Optional[List[MessageAttachment]] = Field(default=None, description="Turn attachments")
+    source_ids: Optional[List[str]] = Field(default=None, description="Explicit source IDs linked to this turn")
+    voice_config: Optional[Dict[str, Any]] = Field(default=None, description="Selected voice parameters {provider, voice_id, speed}")
 
 
 @router.post("/{session_id}/turn", response_model=Message, status_code=status.HTTP_200_OK)
@@ -107,5 +110,8 @@ async def execute_turn(session_id: str, req: ExecuteTurnRequest) -> Message:
         user_prompt=req.content,
         mode=req.mode,
         project_id=req.project_id,
+        attachments=req.attachments,
+        source_ids=req.source_ids,
+        voice_config=req.voice_config,
     )
 

@@ -110,6 +110,14 @@ class ArtifactRepository:
         return cur.rowcount > 0
 
     @staticmethod
+    def update_artifact_metadata(
+        conn: sqlite3.Connection, artifact_id: str, metadata: dict
+    ) -> bool:
+        sql = "UPDATE artifacts SET metadata_json = ? WHERE id = ?"
+        cur = conn.execute(sql, (json.dumps(metadata), artifact_id))
+        return cur.rowcount > 0
+
+    @staticmethod
     def create_artifact_version(conn: sqlite3.Connection, version: ArtifactVersion) -> ArtifactVersion:
         sql = """
             INSERT INTO artifact_versions (

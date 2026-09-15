@@ -7,6 +7,7 @@ import {
   Presentation,
   Table,
   Video,
+  Volume2,
   Globe,
   Code2,
   MessageSquare,
@@ -50,6 +51,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'slides', label: 'Slides', icon: <Presentation size={17} />, isCore: true },
     { id: 'sheets', label: 'Sheets', icon: <Table size={17} />, isCore: true },
     { id: 'video', label: 'Video', icon: <Video size={17} />, isCore: true },
+    { id: 'audio', label: 'Audio', icon: <Volume2 size={17} />, isCore: true },
     { id: 'websites', label: 'Websites', icon: <Globe size={17} />, isCore: false },
     { id: 'code', label: 'Code', icon: <Code2 size={17} />, isCore: false },
   ];

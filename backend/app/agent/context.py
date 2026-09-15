@@ -12,8 +12,11 @@ from ..db.connection import get_connection
 from ..db.repositories.chat_repo import ChatRepository
 from ..db.repositories.source_repo import SourceRepository
 from ..exceptions import EntityNotFoundError
-from ..models.chat import Message
+from ..models.chat import Message, MessageAttachment
+from ..models.content import CanonicalContent
 from ..models.enums import FeatureMode, MessageRole
+from ..models.project import Source
+from ..services.extraction.models import ExtractedDocument
 from .contracts import ToolResult
 
 
@@ -42,6 +45,111 @@ class Observation(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class MediaReference(BaseModel):
+    """Preserved pointer to a native media file on disk."""
+    source_id: str = Field(description="Associated source ID")
+    media_type: str = Field(description="Media type: image, audio, or video")
+    mime_type: str = Field(description="MIME content type")
+    file_path: Optional[str] = Field(default=None, description="Absolute file path on disk")
+    name: Optional[str] = Field(default=None, description="Original filename")
+
+
+class UnifiedInputContext(BaseModel):
+    """Unified cross-format input representation preserving structured context and native media."""
+    user_instruction: str = Field(description="User prompt/instruction for this turn")
+    source_ids: List[str] = Field(default_factory=list, description="IDs of linked/attached sources")
+    attachments: List[MessageAttachment] = Field(default_factory=list, description="Message attachment references")
+    sources: List[Source] = Field(default_factory=list, description="Resolved Source records")
+    extracted_documents: List[ExtractedDocument] = Field(default_factory=list, description="D5 extracted documents")
+    canonical_contents: List[CanonicalContent] = Field(default_factory=list, description="D5 canonical content objects")
+    media_references: List[MediaReference] = Field(default_factory=list, description="Preserved native media references")
+    resolved_intent: Optional[Dict[str, Any]] = Field(default=None, description="Intent gate resolution")
+
+
+class SelectedContext(BaseModel):
+    """Token-budgeted context projection selected for LLM or downstream engine."""
+    prompt_context_snippet: str = Field(default="", description="Token-budgeted text to inject into prompt")
+    media_parts: List[Dict[str, Any]] = Field(default_factory=list, description="Native media parts (e.g. image parts) for multimodal inference")
+    canonical_slice: Optional[Dict[str, Any]] = Field(default=None, description="Targeted slice of canonical content for deliverable generation")
+
+
+class ContextSelector:
+    """Projects task-specific, token-budgeted context from UnifiedInputContext."""
+
+    @staticmethod
+    def select(
+        unified_input: Optional[UnifiedInputContext],
+        intent_type: Optional[str] = None,
+        max_text_chars: int = 1500,
+        max_facts: int = 5,
+    ) -> SelectedContext:
+        if not unified_input:
+            return SelectedContext()
+
+        selected = SelectedContext()
+        prompt_lines = []
+
+        # 1. Native Media Selection: Images for visual perception
+        for media in unified_input.media_references:
+            if media.media_type == "image" and media.file_path:
+                selected.media_parts.append({
+                    "type": "image",
+                    "file_path": media.file_path,
+                    "mime_type": media.mime_type,
+                    "name": media.name or "image",
+                })
+
+        # 2. Structured Context Selection: Budgeted text & canonical facts
+        if unified_input.sources or unified_input.extracted_documents:
+            prompt_lines.append("### Attached Inputs:")
+
+            for src in unified_input.sources:
+                matching_doc = next((d for d in unified_input.extracted_documents if d.source_id == src.id), None)
+                text_content = ""
+                if matching_doc and matching_doc.raw_text:
+                    text_content = matching_doc.raw_text.strip()
+                elif src.extracted_text:
+                    text_content = src.extracted_text.strip()
+
+                if text_content:
+                    if len(text_content) > max_text_chars:
+                        excerpt = text_content[:max_text_chars].rsplit(" ", 1)[0] + "... [truncated]"
+                    else:
+                        excerpt = text_content
+                    prompt_lines.append(f"- Input [{src.name}] (Type: {src.mime_type}):\n{excerpt}")
+                else:
+                    prompt_lines.append(f"- Input [{src.name}] (Type: {src.mime_type}, Size: {src.size_bytes} bytes)")
+
+        # 3. Canonical Facts Selection
+        if unified_input.canonical_contents:
+            facts_collected = []
+            for can in unified_input.canonical_contents:
+                for f in can.facts[:max_facts]:
+                    if f.statement:
+                        facts_collected.append(f.statement)
+
+            if facts_collected:
+                prompt_lines.append("\nKey Grounded Facts:")
+                for fact in facts_collected[:max_facts]:
+                    prompt_lines.append(f"• {fact}")
+
+            # Prepare canonical slice for deliverables
+            primary_can = unified_input.canonical_contents[0]
+            selected.canonical_slice = {
+                "title": primary_can.title,
+                "context": primary_can.context,
+                "core_narrative": primary_can.intent.core_narrative if primary_can.intent else "",
+                "facts": facts_collected[:max_facts],
+                "data_points": [
+                    {"metric": dp.metric, "value": dp.value, "unit": dp.unit or ""}
+                    for dp in primary_can.data_points[:8]
+                ],
+            }
+
+        selected.prompt_context_snippet = "\n".join(prompt_lines).strip()
+        return selected
+
+
 class AgentContext(BaseModel):
     """Active conversational and execution context for a single agent turn."""
     session_id: str = Field(description="Chat session ID")
@@ -60,6 +168,7 @@ class AgentContext(BaseModel):
     total_tool_calls: int = Field(default=0, description="Total tool invocations performed in this cycle")
     start_time: float = Field(default_factory=time.time, description="Monotonic start timestamp")
     retrieval_budget_tokens: int = Field(default_factory=lambda: getattr(settings, "default_retrieval_token_budget", 2000), description="Context retrieval token budget")
+    unified_input: Optional[UnifiedInputContext] = Field(default=None, description="Preserved unified input context for current turn")
 
     def is_timed_out(self) -> bool:
         """Check if execution time has breached max_execution_time_sec."""
@@ -176,6 +285,7 @@ class AgentContextManager:
         user_request: str,
         project_id: Optional[str] = None,
         limits: Optional[AgentLimits] = None,
+        turn_source_ids: Optional[List[str]] = None,
     ) -> AgentContext:
         """Hydrate bounded execution context for an active session turn."""
         effective_limits = limits or AgentLimits()
@@ -197,6 +307,25 @@ class AgentContextManager:
             max_chars_per_source=1500,
             token_budget_chars=4000,
         )
+
+        # Ensure any explicit turn sources are included in source_excerpts
+        if turn_source_ids:
+            with get_connection(self.db_path) as conn:
+                for sid in turn_source_ids:
+                    if not any(ex.source_id == sid for ex in source_excerpts):
+                        src = SourceRepository.get_source(conn, sid)
+                        if src:
+                            txt = src.extracted_text or ""
+                            snippet = txt[:1500] if txt else f"[{src.name}: Registered {src.source_type.value}]"
+                            source_excerpts.append(
+                                SourceExcerpt(
+                                    source_id=src.id,
+                                    name=src.name,
+                                    snippet=snippet,
+                                    total_chars=len(txt),
+                                    relevance_score=10.0,
+                                )
+                            )
 
         # Collect any referenced artifacts across recent turns
         recent_artifacts = []

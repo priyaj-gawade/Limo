@@ -30,6 +30,7 @@ class EngineType(StrEnum):
     NATIVE_SOCIAL = "native_social"            # Phase D6.3: Native LinkedIn/Twitter adapters
     NATIVE_INFOGRAPHIC = "native_infographic"  # Phase D6.3: Native SVG/diagram adapter
     NATIVE_MARKDOWN = "native_markdown"        # Phase D6.3: Native Markdown/HTML adapter
+    TTS_ENGINE = "tts_engine"                  # Phase D8.3: Standalone TTS & Voice Layer
 
 
 class TransformationRequest(LimoBaseModel):

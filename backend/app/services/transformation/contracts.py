@@ -7,6 +7,8 @@ external engine execution payloads without invoking external binaries:
 """
 
 import logging
+import re
+import time
 from typing import List, Optional
 
 from ...models.content import CanonicalContent
@@ -16,7 +18,11 @@ from ...models.generation_contracts import (
     GenOfficeOptions,
     GenOfficePayload,
     VideoEnginePayload,
+    VideoGenerationContract,
     VideoScriptScene,
+    VideoScriptSection,
+    VideoVoiceConfig,
+    VideoBrief,
 )
 from ...models.transformation import PlannedDeliverable
 
@@ -213,6 +219,128 @@ class GenerationContractBuilder:
             total_duration,
         )
         return payload
+
+    @staticmethod
+    def build_video_generation_contract(
+        canonical: CanonicalContent,
+        deliverable: PlannedDeliverable,
+        config: GenerationConfig,
+        job_id: str,
+        conversation_id: Optional[str] = None,
+    ) -> VideoGenerationContract:
+        """Construct an authoritative D8.1/D8.2 VideoGenerationContract for OpenMontage runner."""
+        clean_job_id = re.sub(r"[^a-zA-Z0-9_\-\.]", "_", job_id)
+        if not clean_job_id or clean_job_id in (".", ".."):
+            clean_job_id = f"job_{int(time.time())}"
+
+        target_dur = float(config.video.target_duration_sec if config.video else 15.0)
+        target_dur = max(3.0, min(300.0, target_dur))
+
+        aspect_ratio = config.video.aspect_ratio if config.video else "16:9"
+        if aspect_ratio not in ("16:9", "9:16", "1:1"):
+            aspect_ratio = "16:9"
+
+        # Resolve voice provider and voice ID from config or deliverable options
+        selected_provider = (
+            (config.video.voice_provider if config.video else None)
+            or (deliverable.options or {}).get("voice_provider")
+        )
+        selected_voice = (
+            (config.video.voice_id if config.video else None)
+            or (deliverable.options or {}).get("voice_id")
+            or (config.video.voice_profile if config.video and config.video.voice_profile != "professional_neutral" else None)
+        )
+
+        try:
+            from ..tts.registry import tts_registry
+            p_adapter, v_meta = tts_registry.resolve_voice(voice_id=selected_voice, provider=selected_provider)
+            final_provider = p_adapter.id
+            final_voice_id = v_meta.voice_id
+        except Exception:
+            final_provider = selected_provider or "edge_tts"
+            final_voice_id = selected_voice or "en-US-AndrewMultilingualNeural"
+
+        voice_config = VideoVoiceConfig(
+            provider=final_provider,
+            voice_id=final_voice_id,
+            speed=1.0,
+            pitch=0.0,
+        )
+
+        stock_prov = (deliverable.options or {}).get("stock_provider", "auto")
+        subtitles = config.video.include_subtitles if config.video else True
+        options = {
+            "stock_provider": stock_prov,
+            "burn_subtitles": subtitles,
+        }
+
+        # 1. Clean topic from raw prompt or title to prevent command leakage
+        raw_topic = canonical.title or deliverable.title or "Informative Overview"
+        clean_topic = re.sub(r"^(?:please\s+)?(?:create|make|generate|produce|build|draft)\s+(?:a|an)?\s*", "", raw_topic, flags=re.IGNORECASE)
+        clean_topic = re.sub(r"\b(?:\d+)\s*(?:-|secs?|seconds?)\s*(?:video|clip|reel)?\s*(?:about|on|covering|explaining)?\b", "", clean_topic, flags=re.IGNORECASE)
+        clean_topic = re.sub(r"^(?:video|clip|reel)\s+(?:about|on|covering|explaining)\s*", "", clean_topic, flags=re.IGNORECASE)
+        clean_topic = re.sub(r"\b(?:video|clip|reel)\b", "", clean_topic, flags=re.IGNORECASE)
+        clean_topic = " ".join(clean_topic.split()).strip().title()
+        if not clean_topic:
+            clean_topic = "Informative Overview"
+
+        # 2. Extract sanitized key factual points (not command text)
+        key_points: List[str] = []
+        if canonical.facts:
+            key_points.extend(f.statement for f in canonical.facts if f.statement)
+        if canonical.events:
+            key_points.extend(f"{e.title}: {e.significance}" for e in canonical.events if e.title)
+        if canonical.data_points:
+            key_points.extend(f"{dp.metric}: {dp.value} {dp.unit}" for dp in canonical.data_points)
+        if not key_points and canonical.context and len(canonical.context) > 20:
+            key_points.append(canonical.context[:150])
+
+        # 3. Construct sanitized creative VideoBrief
+        audience = (
+            canonical.intent.target_audiences[0]
+            if canonical.intent and canonical.intent.target_audiences
+            else "General Audience"
+        )
+        brief = VideoBrief(
+            topic=clean_topic,
+            target_duration_seconds=target_dur,
+            aspect_ratio=aspect_ratio,
+            audience=audience,
+            tone="inspirational, educational",
+            language=config.language or "en",
+            key_points=key_points[:5],
+            voice_config=voice_config,
+        )
+
+        # 4. Pre-planned script sections: only if explicitly provided in deliverable options.
+        # Otherwise empty by default so OpenMontage Director Agent writes the authentic script.
+        sections: List[VideoScriptSection] = (deliverable.options or {}).get("script_sections", [])
+
+        contract = VideoGenerationContract(
+            job_id=clean_job_id,
+            title=clean_topic,
+            conversation_id=conversation_id,
+            topic=clean_topic,
+            target_duration_seconds=target_dur,
+            aspect_ratio=aspect_ratio,
+            style_playbook="clean-professional",
+            render_runtime="ffmpeg",
+            voice_config=voice_config,
+            subtitles=subtitles,
+            script_sections=sections,
+            brief=brief,
+            user_directive=(deliverable.options or {}).get("user_directive") or (deliverable.options or {}).get("raw_prompt") or None,
+            options=options,
+        )
+
+        logger.info(
+            "Built VideoGenerationContract for job '%s': topic='%s' (target: %.1fs, brief key_points: %d)",
+            clean_job_id,
+            clean_topic,
+            target_dur,
+            len(key_points),
+        )
+        return contract
 
 
 generation_contract_builder = GenerationContractBuilder()

@@ -51,6 +51,7 @@ class BaseProviderAdapter(ABC):
         timeout_sec: float = 30.0,
         response_mime_type: Optional[str] = None,
         response_schema: Optional[Any] = None,
+        media_parts: Optional[List[Dict[str, Any]]] = None,
         **kwargs: Any,
     ) -> LLMResponse:
         """Execute inference against real provider SDK or endpoint."""

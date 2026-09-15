@@ -71,6 +71,8 @@ class TargetFormat(StrEnum):
     SPREADSHEET = "spreadsheet"
     PDF = "pdf"
     MARKDOWN = "markdown"
+    VIDEO = "video"
+    AUDIO = "audio"
 
 
 class ResolutionResult(BaseModel):
@@ -173,7 +175,7 @@ class IntentResolver:
         # e.g. "Don't create a PDF, just summarize it"
         # -------------------------------------------------------------------
         if re.search(
-            r"\b(don'?t\s+create|do\s+not\s+create|don'?t\s+make|do\s+not\s+make|no\s+(?:pdf|file|doc|document|slides?|spreadsheet)|without\s+creating|don'?t\s+generate|do\s+not\s+generate)\b",
+            r"\b(don'?t\s+create|do\s+not\s+create|don'?t\s+make|do\s+not\s+make|no\s+(?:pdf|file|doc|document|slides?|spreadsheet|video)|without\s+creating|don'?t\s+generate|do\s+not\s+generate)\b",
             d_lower,
         ):
             goal = UserGoal.SUMMARIZE if "summar" in d_lower else UserGoal.QUESTION_ANSWER
@@ -235,10 +237,16 @@ class IntentResolver:
         # Rule 4: Input Source References
         # e.g. "Explain this PDF", "Analyze this spreadsheet", "Summarize the attached document"
         # -------------------------------------------------------------------
+        has_output_transform_target = bool(
+            re.search(
+                r"\b(?:in|into|as|using|with|to)\s+(?:markdown|\.md|audio|speech|voice|narration|slides?|presentation|spreadsheets?|sheets?|xlsx|pdf|documents?|docs?|docx)\b",
+                d_lower,
+            )
+        )
         if re.search(
-            r"\b(?:explain|summarize|summarise|summerise|analyze|analyse|read|look\s+at|check|review|what\s+does)\s+(?:this|the|attached|my|that)\s+(?:pdf|document|doc|spreadsheet|sheet|article|report|file)\b",
+            r"\b(?:explain|summarize|summarise|summerise|analyze|analyse|read|look\s+at|check|review|what\s+does)\s+(?:this|the|attached|my|that)?\s*(?:attached\s+)?(?:pdf|document|doc|spreadsheet|sheet|article|report|file)\b",
             d_lower,
-        ):
+        ) and not has_output_transform_target:
             goal = UserGoal.EXPLAIN if "explain" in d_lower else (UserGoal.ANALYZE if "analy" in d_lower else UserGoal.SUMMARIZE)
             return ResolutionResult(
                 response_type=ResponseType.CHAT_RESPONSE,
@@ -274,7 +282,7 @@ class IntentResolver:
         # Rule 6: Explicit Conversion / Export Requests (TRANSFORM_TO_ARTIFACT)
         # Evaluated before pure conversational summary so "Export this summary as Markdown" is honored!
         # -------------------------------------------------------------------
-        m_conv = re.search(r"\b(?:convert|transform|turn|export)\s+(.+?)\s+(?:in|as|to|into)\s+([a-z0-9_\s]+)", d_lower)
+        m_conv = re.search(r"\b(?:convert|transform|turn|export|put)\s+(.+?)\s+(?:in|as|to|into)\s+([a-z0-9_\s]+)", d_lower)
         if m_conv:
             src_phrase = m_conv.group(1).strip()
             target_str = m_conv.group(2).strip()
@@ -324,6 +332,24 @@ class IntentResolver:
                     reason="Explicit conversion to Document deliverable",
                     source_reference=src_phrase,
                 )
+            elif any(w in target_str for w in ["video", "mp4"]):
+                return ResolutionResult(
+                    response_type=ResponseType.TRANSFORM_TO_ARTIFACT,
+                    user_goal=UserGoal.CONVERT_DELIVERABLE,
+                    target_format=TargetFormat.VIDEO,
+                    confidence=ConfidenceLevel.HIGH,
+                    reason="Explicit conversion to Video deliverable",
+                    source_reference=src_phrase,
+                )
+            elif any(w in target_str for w in ["audio", "speech", "narration", "mp3", "voice"]):
+                return ResolutionResult(
+                    response_type=ResponseType.TRANSFORM_TO_ARTIFACT,
+                    user_goal=UserGoal.CONVERT_DELIVERABLE,
+                    target_format=TargetFormat.AUDIO,
+                    confidence=ConfidenceLevel.HIGH,
+                    reason="Explicit conversion to Audio/TTS deliverable",
+                    source_reference=src_phrase,
+                )
             elif any(w in target_str for w in ["notes", "something", "nicely"]):
                 return ResolutionResult(
                     response_type=ResponseType.AMBIGUOUS,
@@ -359,17 +385,21 @@ class IntentResolver:
         # Active UI mode explicitly sets the deliverable format container.
         # Format explicitly requested in text (e.g. Markdown, PDF, Slides) overrides mode.
         # -------------------------------------------------------------------
-        if mode_str in ("docs", "slides", "sheets"):
+        if mode_str in ("docs", "slides", "sheets", "video", "audio"):
             mode_to_fmt = {
                 "docs": TargetFormat.DOCUMENT,
                 "slides": TargetFormat.PRESENTATION,
                 "sheets": TargetFormat.SPREADSHEET,
+                "video": TargetFormat.VIDEO,
+                "audio": TargetFormat.AUDIO,
             }
             override_fmt = mode_to_fmt[mode_str]
 
             # If user explicitly requested another format in text, text format takes precedence
             if re.search(r"\b(markdown|\.md)\b", d_lower):
                 target_f = TargetFormat.MARKDOWN
+            elif re.search(r"\b(videos?|explainer\s+video)\b", d_lower):
+                target_f = TargetFormat.VIDEO
             elif re.search(r"\b(pdfs?|executive\s+memo\s+pdf)\b", d_lower):
                 target_f = TargetFormat.PDF
             elif re.search(r"\b(presentations?|slides?|deck|pptx|powerpoint)\b", d_lower):
@@ -378,6 +408,8 @@ class IntentResolver:
                 target_f = TargetFormat.SPREADSHEET
             elif re.search(r"\b(documents?|docs?|docx)\b", d_lower):
                 target_f = TargetFormat.DOCUMENT
+            elif re.search(r"\b(audio|speech|narration|voiceover|read\s+(?:this\s+)?aloud)\b", d_lower):
+                target_f = TargetFormat.AUDIO
             else:
                 target_f = override_fmt
 
@@ -417,7 +449,9 @@ class IntentResolver:
         has_explicit_sheet = bool(re.search(r"\b(spreadsheets?|sheets?|workbooks?|xlsx|excel\s+(?:file|sheet)|csv\s+file)\b", d_unquoted))
         has_explicit_pdf = bool(re.search(r"\b(pdfs?|executive\s+memo\s+pdf|pdf\s+report)\b", d_unquoted))
         has_explicit_md_file = bool(re.search(r"\b(markdown\s+(?:document|doc|report|file)|md\s+file|downloadable\s+markdown)\b", d_unquoted))
-        has_format_keyword = any([has_explicit_doc, has_explicit_slides, has_explicit_sheet, has_explicit_pdf, has_explicit_md_file])
+        has_explicit_video = bool(re.search(r"\b(videos?|explainer\s+video|video\s+clip|short\s+video)\b", d_unquoted))
+        has_explicit_audio = bool(re.search(r"\b(audio|speech\s+file|narration|audio\s+file|mp3|voiceover|read\s+(?:this\s+)?aloud)\b", d_unquoted))
+        has_format_keyword = any([has_explicit_doc, has_explicit_slides, has_explicit_sheet, has_explicit_pdf, has_explicit_md_file, has_explicit_video, has_explicit_audio])
 
         # Special case: "Summarize this in Markdown" -> Ambiguous whether chat formatting or .md file
         if is_pure_conversational_goal and re.search(r"\bin\s+markdown\b", d_lower) and not has_explicit_md_file:
@@ -433,8 +467,21 @@ class IntentResolver:
                 ),
             )
 
+        # Special case: "Summarize this using audio / in audio" -> Ambiguous between chat and audio deliverable
+        if is_pure_conversational_goal and re.search(r"\b(?:in|using|with|as)\s+(?:audio|speech|voice|narration)\b", d_lower):
+            return ResolutionResult(
+                response_type=ResponseType.AMBIGUOUS,
+                user_goal=UserGoal.AMBIGUOUS,
+                confidence=ConfidenceLevel.MEDIUM,
+                reason="User requested summary with audio medium without specifying format preference",
+                ambiguous_options=[TargetFormat.AUDIO, TargetFormat.DOCUMENT],
+                clarification_prompt=(
+                    "Would you like a written summary here in chat, or an audio narration deliverable?"
+                ),
+            )
+
         # If user has pure conversational goal and NO explicit deliverable creation command
-        has_creation_command = bool(re.search(r"\b(create|generate|make|draft|produce|build|export|convert|transform|turn)\s+(?:a\s+|an\s+)?", d_unquoted))
+        has_creation_command = bool(re.search(r"\b(create|generate|make|draft|produce|build|export|convert|transform|turn|read\s+aloud|synthesize)\s+(?:a\s+|an\s+)?", d_unquoted))
         if is_pure_conversational_goal and not (has_creation_command and has_format_keyword):
             goal = (
                 UserGoal.SUMMARIZE if has_summarize else
@@ -470,6 +517,10 @@ class IntentResolver:
             detected_formats.append(TargetFormat.DOCUMENT)
         if has_explicit_sheet or ("spreadsheet table" in d_unquoted or "table of sales" in d_unquoted):
             detected_formats.append(TargetFormat.SPREADSHEET)
+        if has_explicit_video:
+            detected_formats.append(TargetFormat.VIDEO)
+        if has_explicit_audio or re.search(r"\b(read\s+(?:this\s+)?aloud|synthesize\s+(?:speech|voice|audio))\b", d_unquoted):
+            detected_formats.append(TargetFormat.AUDIO)
 
 
         # Ambiguous disjunctive formats: "document or slides", "maybe a spreadsheet or a doc"

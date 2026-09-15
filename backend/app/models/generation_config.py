@@ -26,9 +26,11 @@ class PresentationOptions(BaseModel):
 
 class VideoOptions(BaseModel):
     """Output-specific parameters for synthesized videos (OpenMontage / MoneyPrinterTurbo)."""
-    target_duration_sec: int = Field(default=60, ge=15, le=900, description="Target duration in seconds")
+    target_duration_sec: int = Field(default=60, ge=8, le=900, description="Target duration in seconds")
     aspect_ratio: str = Field(default="16:9", description="Video aspect ratio (e.g. '16:9', '9:16')")
     voice_profile: str = Field(default="professional_neutral", description="TTS voice profile identifier")
+    voice_provider: Optional[str] = Field(default=None, description="TTS voice provider (e.g. 'azure', 'openai', 'piper', 'edge_tts')")
+    voice_id: Optional[str] = Field(default=None, description="TTS voice ID (e.g. 'en-US-AndrewMultilingualNeural', 'alloy')")
     pacing: str = Field(default="moderate", description="Speech and scene pacing (e.g. 'fast', 'moderate', 'deliberate')")
     include_subtitles: bool = Field(default=True, description="Whether to render hardcoded subtitles/captions")
 
@@ -58,6 +60,14 @@ class InfographicOptions(BaseModel):
 class SpreadsheetOptions(BaseModel):
     """Output-specific parameters for tabular workbooks (GenOffice Sheets)."""
     include_charts: bool = Field(default=True, description="Whether to include summary charts")
+
+
+class AudioOptions(BaseModel):
+    """Output-specific parameters for standalone TTS audio narration."""
+    voice_provider: Optional[str] = Field(default=None, description="TTS provider ID")
+    voice_id: Optional[str] = Field(default=None, description="Voice identifier")
+    speed: float = Field(default=1.0, ge=0.25, le=4.0, description="Speech rate multiplier")
+    output_format: str = Field(default="mp3", description="Audio container extension")
     table_theme: str = Field(default="corporate", description="Table styling theme (e.g. 'corporate', 'modern')")
     freeze_header: bool = Field(default=True, description="Whether to freeze the header row")
 
@@ -113,6 +123,10 @@ class GenerationConfig(LimoBaseModel):
         default=None,
         description="Deliverable-specific parameters for infographics"
     )
+    audio: Optional[AudioOptions] = Field(
+        default=None,
+        description="Deliverable-specific parameters for audio narration"
+    )
 
     # 3. Generic/arbitrary forward-compatible overrides
     format_overrides: Dict[str, Any] = Field(
@@ -141,4 +155,6 @@ class GenerationConfig(LimoBaseModel):
             return self.social or SocialOptions()
         if fmt == OutputFormat.INFOGRAPHIC:
             return self.infographic or InfographicOptions()
+        if fmt == OutputFormat.AUDIO:
+            return self.audio or AudioOptions()
         return BaseModel()

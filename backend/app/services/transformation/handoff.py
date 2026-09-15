@@ -12,6 +12,8 @@ and ordered public lifecycle events:
 
 import logging
 from pathlib import Path
+import subprocess
+import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...core.ids import generate_artifact_id
@@ -87,6 +89,26 @@ class JobArtifactHandoffService:
                 "format": format_val,
                 "engine_type": engine_type,
                 "attempt": attempt,
+            },
+        )
+
+    def on_task_progress(
+        self,
+        job_id: str,
+        deliverable_id: str,
+        format_val: str,
+        stage: str,
+        message: str,
+    ) -> None:
+        """Emit task.progress lifecycle event for long-running deliverables (e.g. video)."""
+        self.event_broker.emit(
+            job_id=job_id,
+            event_type=TransformationEventType.TASK_PROGRESS,
+            payload={
+                "deliverable_id": deliverable_id,
+                "format": format_val,
+                "stage": stage,
+                "message": message,
             },
         )
 
@@ -412,5 +434,197 @@ class JobArtifactHandoffService:
         )
         return artifact
 
+    def handoff_video_artifact(
+        self,
+        job_id: str,
+        deliverable_id: str,
+        openmontage_result: Dict[str, Any],
+        title: Optional[str] = None,
+        canonical_id: Optional[str] = None,
+        canonical_hash: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ) -> Artifact:
+        """Ingest a physical MP4 artifact from OpenMontage runner into Limo sandboxed storage and register it.
+
+        Strict compliance:
+        1. Validates output file exists on disk, is non-empty, and ends with .mp4.
+        2. Computes content hash directly from bytes.
+        3. Checks idempotency (prevents duplicate artifacts for same job + hash).
+        4. Ingests bytes into sandboxed storage data/artifacts/art_<id>/final.mp4.
+        5. Registers Artifact entity with metadata linking back to OpenMontage output metadata.
+        6. Links artifact ID into job.artifact_ids if job exists.
+        7. Emits TransformationEventType.ARTIFACT_CREATED.
+        """
+        output_info = openmontage_result.get("output") or {}
+        output_path_str = output_info.get("path") or ""
+        output_path = Path(output_path_str)
+        if not output_path_str or not output_path.is_file() or output_path.stat().st_size == 0:
+            raise StorageError(f"OpenMontage video output file does not exist or is empty: '{output_path_str}'")
+
+        if output_path.suffix.lower() != ".mp4":
+            raise StorageError(f"Expected MP4 output from OpenMontage, got: '{output_path.name}'")
+
+        file_bytes = output_path.read_bytes()
+        content_hash = self.storage.compute_sha256(file_bytes)
+
+        job = None
+        if job_id:
+            try:
+                job = self.job_svc.get_job(job_id)
+            except Exception:
+                job = None
+
+        # Idempotency check: reuse artifact if already registered for this job with identical hash
+        if job:
+            existing_artifacts = self.art_svc.list_artifacts(job_id=job.id)
+            for existing in existing_artifacts:
+                if existing.content_hash == content_hash:
+                    logger.info(
+                        "Video artifact already ingested for job '%s' with hash '%s' (artifact_id: %s)",
+                        job.id,
+                        content_hash[:8],
+                        existing.id,
+                    )
+                    return existing
+
+        art_id = generate_artifact_id()
+        filename = output_info.get("filename") or output_path.name
+        storage_ref, size_bytes, _ = self.storage.save_artifact_file(
+            artifact_id=art_id,
+            filename=filename,
+            content=file_bytes,
+        )
+
+        runner_meta = openmontage_result.get("metadata") or {}
+        metadata = {
+            "deliverable_id": deliverable_id,
+            "openmontage_job_id": openmontage_result.get("job_id"),
+            "engine": "video_engine",
+            "duration_seconds": output_info.get("duration_seconds", runner_meta.get("actual_duration_seconds")),
+            "width": output_info.get("width"),
+            "height": output_info.get("height"),
+            "video_codec": output_info.get("video_codec"),
+            "audio_codec": output_info.get("audio_codec"),
+            "has_audio": output_info.get("has_audio", True),
+            "tts_provider": runner_meta.get("tts_provider", "edge_tts"),
+            "voice": runner_meta.get("voice", "en-US-AndrewMultilingualNeural"),
+            "visual_provider": runner_meta.get("visual_provider", "auto"),
+            "scene_count": runner_meta.get("scene_count", 2),
+            "aspect_ratio": runner_meta.get("aspect_ratio", "16:9"),
+            "render_runtime": runner_meta.get("render_runtime", "ffmpeg"),
+        }
+        if canonical_id:
+            metadata["canonical_id"] = canonical_id
+        if canonical_hash:
+            metadata["canonical_hash"] = canonical_hash
+
+        artifact_title = title or runner_meta.get("title") or output_path.stem
+        dur_str = f"{metadata['duration_seconds']}s" if metadata.get("duration_seconds") else "video"
+        res_str = f"{metadata['width']}x{metadata['height']}" if metadata.get("width") else "16:9"
+
+        # Resilient multi-tier video poster extraction (0.5s -> min(0.1s, duration) -> 0.0s)
+        try:
+            dur_val = float(output_info.get("duration_seconds") or runner_meta.get("actual_duration_seconds") or 3.0)
+            thumb_bytes = _extract_video_thumbnail(output_path, dur_val)
+            if thumb_bytes:
+                thumb_ref, _, _ = self.storage.save_artifact_file(
+                    artifact_id=art_id,
+                    filename="thumbnail.png",
+                    content=thumb_bytes,
+                )
+                metadata["thumbnail_storage_ref"] = thumb_ref
+        except Exception as ex:
+            logger.warning("Could not extract poster thumbnail for video '%s': %s", art_id, ex)
+
+        resolved_project_id = project_id or (job.project_id if job else None)
+        resolved_job_id = job.id if job else None
+
+        artifact = self.art_svc.register_artifact(
+            title=artifact_title,
+            artifact_type=ArtifactType.VIDEO,
+            file_format=".mp4",
+            storage_ref=storage_ref,
+            project_id=resolved_project_id,
+            job_id=resolved_job_id,
+            description=f"Generated {metadata['aspect_ratio']} video ({dur_str}) via OpenMontage engine",
+            stats=f"{dur_str} • {res_str}",
+            metadata=metadata,
+            artifact_id=art_id,
+        )
+
+        # Update job's artifact_ids if job exists
+        if job:
+            art_ids = list(job.artifact_ids)
+            if artifact.id not in art_ids:
+                art_ids.append(artifact.id)
+                self.job_svc.update_progress(
+                    job_id=job.id,
+                    state=job.state,
+                    progress=job.progress,
+                    current_stage=job.current_stage or "Artifact generated via OpenMontage",
+                    artifact_ids=art_ids,
+                )
+
+            # Emit ARTIFACT_CREATED event
+            self.event_broker.emit(
+                job_id=job.id,
+                event_type=TransformationEventType.ARTIFACT_CREATED,
+                payload={
+                    "artifact_id": artifact.id,
+                    "job_id": job.id,
+                    "deliverable_id": deliverable_id,
+                    "title": artifact.title,
+                    "file_format": artifact.file_format,
+                    "size_bytes": artifact.size_bytes,
+                    "content_hash": artifact.content_hash,
+                    "artifact_type": artifact.artifact_type.value,
+                    "duration_seconds": metadata.get("duration_seconds"),
+                    "resolution": f"{metadata.get('width')}x{metadata.get('height')}",
+                },
+            )
+
+        logger.info(
+            "Successfully ingested and handed off Video artifact '%s' for job '%s' (bytes: %d, sha256: %s)",
+            artifact.id,
+            resolved_job_id,
+            size_bytes,
+            content_hash[:8],
+        )
+        return artifact
+
+
+def _extract_video_thumbnail(output_path: Path, duration: float = 3.0) -> Optional[bytes]:
+    """Resilient multi-tier poster frame extraction via ffmpeg:
+    1. Try t=0.5s.
+    2. Fallback to min(0.1s, max(0.01s, duration - 0.05s)).
+    3. Fallback to first frame (0.0s).
+    """
+    attempts = [
+        ["-ss", "00:00:00.500"],
+        ["-ss", f"{max(0.01, min(0.1, duration - 0.05)):.3f}"],
+        [],  # frame 0 fallback
+    ]
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+
+    try:
+        for ss_args in attempts:
+            cmd = ["ffmpeg", "-y"] + ss_args + ["-i", str(output_path), "-frames:v", "1", "-q:v", "2", str(tmp_path)]
+            try:
+                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if tmp_path.is_file() and tmp_path.stat().st_size > 0:
+                    return tmp_path.read_bytes()
+            except Exception:
+                continue
+    finally:
+        if tmp_path.is_file():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+    return None
+
 
 job_artifact_handoff_service = JobArtifactHandoffService()
+

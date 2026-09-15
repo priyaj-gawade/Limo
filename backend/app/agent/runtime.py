@@ -4,10 +4,11 @@ import json
 import logging
 import re
 import time
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..exceptions import EntityNotFoundError
-from ..models.chat import Message
+from ..models.chat import Message, MessageAttachment
+from ..services.tts.service import tts_service
 from ..models.content import (
     CanonicalContent,
     CanonicalDataPoint,
@@ -15,7 +16,8 @@ from ..models.content import (
     CanonicalIntent,
 )
 from ..models.enums import ArtifactType, FeatureMode, OutputFormat
-from ..models.generation_config import GenerationConfig
+from ..models.generation_config import GenerationConfig, VideoOptions
+from ..models.project import Source
 from ..models.transformation import (
     EngineRoute,
     EngineType,
@@ -25,12 +27,24 @@ from ..models.transformation import (
 )
 from ..services.artifact_service import artifact_service
 from ..services.chat_service import ChatService, chat_service
+from ..services.extraction.models import ExtractedDocument
+from ..services.extraction.service import extraction_service
+from ..services.job_service import JobService, job_service
+from ..services.source_service import source_service
 from ..services.transformation.engine_router import EngineRouter, engine_router
 from ..services.transformation.genoffice_client import genoffice_client
 from ..services.transformation.output_planner import OutputPlanner, output_planner
 from ..storage.service import storage_service
 from .brain import LLMReasoningEngine, ReasoningEngine
-from .context import AgentContextManager, AgentLimits
+from .context import (
+    AgentContext,
+    AgentContextManager,
+    AgentLimits,
+    ContextSelector,
+    MediaReference,
+    SelectedContext,
+    UnifiedInputContext,
+)
 from .contracts import BaseTool
 from .intent import (
     ConfidenceLevel,
@@ -60,6 +74,7 @@ class LimoAgentRuntime:
         intent_res: Optional[IntentResolver] = None,
         output_plan: Optional[OutputPlanner] = None,
         eng_router: Optional[EngineRouter] = None,
+        jb_svc: Optional[JobService] = None,
     ):
         self.reasoning_engine = reasoning_engine or LLMReasoningEngine()
         self.context_manager = context_manager or AgentContextManager()
@@ -69,7 +84,100 @@ class LimoAgentRuntime:
         self.intent_resolver = intent_res or intent_resolver
         self.output_planner = output_plan or output_planner
         self.engine_router = eng_router or engine_router
+        self.job_svc = jb_svc or job_service
         self.loop = AgentLoop(self.reasoning_engine, self.context_manager)
+
+    async def _hydrate_unified_input_context(
+        self,
+        user_prompt: str,
+        effective_source_ids: List[str],
+        attachments: Optional[List[MessageAttachment]],
+    ) -> UnifiedInputContext:
+        """Hydrate unified context across attachments/sources using D5 cache authority.
+        
+        Guarantees:
+        - Checks D5 extraction cache first: never re-extracts an unchanged source.
+        - Checks D5 canonical cache first: never re-canonicalizes an unchanged source.
+        - Preserves native media references (file_path, mime_type) for image/audio/video.
+        - Resolves structured text, tables, and canonical facts for prompt/deliverable projection.
+        """
+        sources: List[Source] = []
+        extracted_docs: List[ExtractedDocument] = []
+        canonical_contents: List[CanonicalContent] = []
+        media_references: List[MediaReference] = []
+
+        for sid in effective_source_ids:
+            try:
+                source = source_service.get_source(sid)
+                sources.append(source)
+            except Exception as e:
+                logger.warning("Could not fetch source '%s' during context hydration: %s", sid, e)
+                continue
+
+            # 1. D5 Extraction (with cache hit check: NO repeated extraction)
+            doc = extraction_service.get_cached_extraction(source.id)
+            if not doc:
+                try:
+                    doc = await extraction_service.extract_source(source)
+                except Exception as e:
+                    logger.warning("D5 extraction error for source '%s': %s", source.id, e)
+                    doc = None
+
+            if doc:
+                extracted_docs.append(doc)
+
+            # 2. Native Media References (image, audio, video)
+            mime = (source.mime_type or "").lower()
+            filename = (source.name or "").lower()
+            is_img = "image" in mime or filename.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif"))
+            is_aud = "audio" in mime or filename.endswith((".mp3", ".wav", ".m4a", ".ogg", ".aac"))
+            is_vid = "video" in mime or filename.endswith((".mp4", ".mov", ".avi", ".mkv", ".webm"))
+
+            media_type = "image" if is_img else ("audio" if is_aud else ("video" if is_vid else None))
+            if media_type:
+                file_path = None
+                if source.storage_ref:
+                    try:
+                        resolved = storage_service.safe_resolve(source.storage_ref)
+                        if resolved and resolved.exists():
+                            file_path = str(resolved)
+                    except Exception as e:
+                        logger.warning("Failed to resolve storage path for media '%s': %s", source.id, e)
+
+                media_references.append(
+                    MediaReference(
+                        source_id=source.id,
+                        media_type=media_type,
+                        mime_type=source.mime_type,
+                        file_path=file_path,
+                        name=source.name,
+                    )
+                )
+
+            # 3. D5 Canonicalization (Cache check first: NO repeated canonicalization)
+            from ..services.canonical.service import canonical_service
+            from ..services.normalization.service import normalization_service
+
+            can = canonical_service.get_canonical_by_source_id(source.id)
+            if not can and doc:
+                try:
+                    norm_doc = normalization_service.normalize_extracted_document(doc)
+                    can = await canonical_service.canonicalize(norm_doc)
+                except Exception as e:
+                    logger.info("Canonicalization skipped or deferred for source '%s': %s", source.id, e)
+
+            if can:
+                canonical_contents.append(can)
+
+        return UnifiedInputContext(
+            user_instruction=user_prompt,
+            source_ids=effective_source_ids,
+            attachments=attachments or [],
+            sources=sources,
+            extracted_documents=extracted_docs,
+            canonical_contents=canonical_contents,
+            media_references=media_references,
+        )
 
     async def execute_turn(
         self,
@@ -79,38 +187,59 @@ class LimoAgentRuntime:
         project_id: Optional[str] = None,
         tools: Optional[List[BaseTool]] = None,
         limits: Optional[AgentLimits] = None,
+        attachments: Optional[List[MessageAttachment]] = None,
+        source_ids: Optional[List[str]] = None,
+        voice_config: Optional[Dict[str, Any]] = None,
     ) -> Message:
         """Execute a complete agent conversational turn.
         
         Flow:
-        1. Persist user prompt to chat session.
-        2. Hydrate token-budgeted, selective context (targeted source retrieval).
-        3. Match and activate domain skills (Tier 2 progressive disclosure).
-        4. Fast Intent Gate:
+        1. Persist user prompt and attachments to chat session.
+        2. Hydrate unified cross-format input context with D5 cache authority.
+        3. Hydrate token-budgeted, selective context (targeted source retrieval).
+        4. Match and activate domain skills (Tier 2 progressive disclosure).
+        5. Fast Intent Gate:
            - AMBIGUOUS: Return concise clarification prompt, zero files/artifacts.
            - FAST_CHAT (tools is None): Direct lightweight generation with zero tool schemas.
            - GENERATE / TRANSFORM: Route through D6 Transformation Pipeline Authority:
              TransformationRequest -> OutputPlan -> EngineRouter
              * NativeMarkdownAdapter for Markdown (.md)
              * GenOffice Runner for Office deliverables (.docx, .pptx, .xlsx, .pdf)
-        5. Fallback: Run bounded AgentLoop state machine with registered tools.
-        6. Persist assistant response turn to SQLite with public execution summary.
-        7. Return the resulting Message entity.
+        6. Fallback: Run bounded AgentLoop state machine with registered tools.
+        7. Persist assistant response turn to SQLite with public execution summary.
+        8. Return the resulting Message entity.
         """
-        # 1. Persist user turn
+        # Resolve effective source IDs from attachments and explicit source_ids
+        effective_source_ids: List[str] = list(source_ids or [])
+        if attachments:
+            for att in attachments:
+                if att.source_id and att.source_id not in effective_source_ids:
+                    effective_source_ids.append(att.source_id)
+
+        # 1. Persist user turn with attachments
         user_msg = self.chat_svc.add_user_message(
             session_id=session_id,
             content=user_prompt,
             mode=mode,
+            attachments=attachments,
         )
 
-        # 2. Hydrate bounded context
+        # 2. Hydrate unified input context & D5 cache
+        unified_input = await self._hydrate_unified_input_context(
+            user_prompt=user_prompt,
+            effective_source_ids=effective_source_ids,
+            attachments=attachments,
+        )
+
+        # 3. Hydrate bounded context
         context = self.context_manager.load_context(
             session_id=session_id,
             user_request=user_prompt,
             project_id=project_id,
             limits=limits,
+            turn_source_ids=effective_source_ids if effective_source_ids else None,
         )
+        context.unified_input = unified_input
         if mode:
             context.active_mode = mode
 
@@ -183,20 +312,39 @@ class LimoAgentRuntime:
                     TargetFormat.SPREADSHEET: OutputFormat.SPREADSHEET,
                     TargetFormat.PDF: OutputFormat.PDF,
                     TargetFormat.MARKDOWN: OutputFormat.MARKDOWN,
+                    TargetFormat.VIDEO: OutputFormat.VIDEO,
+                    TargetFormat.AUDIO: OutputFormat.AUDIO,
                 }
                 out_fmt = format_mapping.get(resolution.target_format, OutputFormat.DOCUMENT)
 
-                # Derive clean human title
+                # Derive clean human title (grounded in canonical title if available)
+                grounded_canonical_title = None
+                if context.unified_input and context.unified_input.canonical_contents:
+                    grounded_canonical_title = context.unified_input.canonical_contents[0].title
+                elif context.unified_input and context.unified_input.sources and context.unified_input.sources[0].name:
+                    grounded_canonical_title = re.sub(r"\.[^.]+$", "", context.unified_input.sources[0].name).replace("_", " ").title()
+
+                # Detect if prompt is a generic conversion directive without an explicit title
+                is_generic_directive = bool(re.match(
+                    r"^(put|turn|convert|transform|make|create|generate|write)\s+(this|these|it|the attached|attached file|attachment)?\s*(into|in|to|as|from)?\s*(a\s+)?(one-page\s+|2-slide\s+|small\s+|short\s+|8-second\s+|15-second\s+)?(markdown\s+|md\s+|docs?|documents?|presentations?|slides?|spreadsheets?|sheets?|tables?|pdfs?|videos?|memos?|explainer\s+video)?\s*$",
+                    user_prompt.strip(),
+                    flags=re.IGNORECASE,
+                ))
+
                 title_cand = re.sub(
-                    r"^(create|generate|write|make|convert|transform|turn)\s+(a\s+)?(one-page\s+|2-slide\s+|small\s+)?(markdown\s+|md\s+|docs?|documents?|slides?|presentations?|spreadsheets?|sheets?|tables?|pdfs?|memos?)\s+(on|about|for|of|into|to)?\s*",
+                    r"^(?:create|generate|write|make|convert|transform|turn|put|read\s+(?:this\s+)?aloud|narrate)\s+(?:a\s+)?(?:one-page\s+|2-slide\s+|small\s+|short\s+|8-second\s+|15-second\s+)?(?:markdown\s+|md\s+|docs?|documents?|slides?|presentations?|spreadsheets?|sheets?|tables?|pdfs?|memos?|videos?|explainer\s+video|audio|speech|narration)?\s*(?:on|about|for|of|into|to|from|:)?\s*(?:this|these|the attached|it)?\s*",
                     "",
                     user_prompt,
                     flags=re.IGNORECASE,
                 ).strip()
                 title_cand = re.sub(r"\s+with\s+a\s+title.*$", "", title_cand, flags=re.IGNORECASE).strip()
                 title_cand = re.sub(r"[^\w\s-]", "", title_cand).strip().rstrip(".!?")
-                if not title_cand or len(title_cand) < 2:
-                    title_cand = f"{out_fmt.value.capitalize()}_{int(time.time())}"
+
+                if is_generic_directive or not title_cand or len(title_cand) < 2 or title_cand.lower() in ("this", "these", "it", "the attached", "document", "slides", "presentation", "sheet", "spreadsheet", "video", "audio"):
+                    if grounded_canonical_title:
+                        title_cand = "_".join(w.capitalize() for w in grounded_canonical_title.split())[:45]
+                    else:
+                        title_cand = f"{out_fmt.value.capitalize()}_{int(time.time())}"
                 else:
                     title_cand = "_".join(w.capitalize() for w in title_cand.split())[:45]
 
@@ -218,85 +366,88 @@ class LimoAgentRuntime:
 
                 # Branch 3a: Native Markdown Deliverable (D6.3 Native Adapter — NO GENOFFICE)
                 if route.engine_type == EngineType.NATIVE_MARKDOWN:
-                    canonical_data = None
-                    try:
-                        gen_prompt = (
-                            f"You are Limo's Grounded Content Synthesis Engine.\n"
-                            f"The user requested a structured Markdown document with the following instruction:\n"
-                            f"\"{user_prompt}\"\n\n"
-                            f"Generate a JSON object with:\n"
-                            f"- \"title\": string, document title (e.g. '{display_title}')\n"
-                            f"- \"primary_purpose\": string, document objective\n"
-                            f"- \"core_narrative\": string, executive summary / core narrative\n"
-                            f"- \"context\": string, 1-2 paragraph introduction / situational context\n"
-                            f"- \"data_points\": list of at least 5 objects with keys [\"metric\", \"value\", \"unit\", \"context\"] representing rows of the table\n"
-                            f"- \"facts\": list of 2-3 strings representing grounded findings\n\n"
-                            f"Return ONLY valid JSON."
+                    if context.unified_input and context.unified_input.canonical_contents:
+                        canonical = context.unified_input.canonical_contents[0]
+                    else:
+                        canonical_data = None
+                        try:
+                            gen_prompt = (
+                                f"You are Limo's Grounded Content Synthesis Engine.\n"
+                                f"The user requested a structured Markdown document with the following instruction:\n"
+                                f"\"{user_prompt}\"\n\n"
+                                f"Generate a JSON object with:\n"
+                                f"- \"title\": string, document title (e.g. '{display_title}')\n"
+                                f"- \"primary_purpose\": string, document objective\n"
+                                f"- \"core_narrative\": string, executive summary / core narrative\n"
+                                f"- \"context\": string, 1-2 paragraph introduction / situational context\n"
+                                f"- \"data_points\": list of at least 5 objects with keys [\"metric\", \"value\", \"unit\", \"context\"] representing rows of the table\n"
+                                f"- \"facts\": list of 2-3 strings representing grounded findings\n\n"
+                                f"Return ONLY valid JSON."
+                            )
+                            res = await self.reasoning_engine.provider_manager.generate(
+                                prompt=gen_prompt,
+                                temperature=0.2,
+                            )
+                            raw_text = res.text.strip()
+                            if raw_text.startswith("```json"):
+                                raw_text = raw_text[7:]
+                            if raw_text.startswith("```"):
+                                raw_text = raw_text[3:]
+                            if raw_text.endswith("```"):
+                                raw_text = raw_text[:-3]
+                            canonical_data = json.loads(raw_text.strip())
+                        except Exception as e:
+                            logger.warning("LLM canonical synthesis error (falling back to deterministic structure): %s", e)
+
+                        if not canonical_data or not isinstance(canonical_data, dict):
+                            canonical_data = {}
+
+                        doc_title = canonical_data.get("title") or display_title
+                        primary_purpose = canonical_data.get("primary_purpose") or f"Provide a concise analytical overview of {display_title}."
+                        core_narrative = canonical_data.get("core_narrative") or f"Synthesized overview of {display_title}."
+                        context_text = canonical_data.get("context") or (
+                            f"Analytical brief covering core dimensions, structured metrics, and grounded observations on {display_title}."
                         )
-                        res = await self.reasoning_engine.provider_manager.generate(
-                            prompt=gen_prompt,
-                            temperature=0.2,
-                        )
-                        raw_text = res.text.strip()
-                        if raw_text.startswith("```json"):
-                            raw_text = raw_text[7:]
-                        if raw_text.startswith("```"):
-                            raw_text = raw_text[3:]
-                        if raw_text.endswith("```"):
-                            raw_text = raw_text[:-3]
-                        canonical_data = json.loads(raw_text.strip())
-                    except Exception as e:
-                        logger.warning("LLM canonical synthesis error (falling back to deterministic structure): %s", e)
 
-                    if not canonical_data or not isinstance(canonical_data, dict):
-                        canonical_data = {}
+                        raw_dps = canonical_data.get("data_points")
+                        if not raw_dps or not isinstance(raw_dps, list) or len(raw_dps) < 5:
+                            raw_dps = [
+                                {"metric": "Primary Indicator", "value": "1,419", "unit": "Index", "context": "Baseline benchmark"},
+                                {"metric": "Secondary Growth", "value": "28.4%", "unit": "YoY", "context": "Annual operational expansion"},
+                                {"metric": "Efficiency Factor", "value": "94.2", "unit": "%", "context": "Process effectiveness"},
+                                {"metric": "Market Volume", "value": "620", "unit": "$M", "context": "Aggregate segment value"},
+                                {"metric": "Projected Impact", "value": "3.8x", "unit": "Multiple", "context": "Forward expectation"},
+                            ]
 
-                    doc_title = canonical_data.get("title") or display_title
-                    primary_purpose = canonical_data.get("primary_purpose") or f"Provide a concise analytical overview of {display_title}."
-                    core_narrative = canonical_data.get("core_narrative") or f"Synthesized overview of {display_title}."
-                    context_text = canonical_data.get("context") or (
-                        f"Analytical brief covering core dimensions, structured metrics, and grounded observations on {display_title}."
-                    )
-
-                    raw_dps = canonical_data.get("data_points")
-                    if not raw_dps or not isinstance(raw_dps, list) or len(raw_dps) < 5:
-                        raw_dps = [
-                            {"metric": "Primary Indicator", "value": "1,419", "unit": "Index", "context": "Baseline benchmark"},
-                            {"metric": "Secondary Growth", "value": "28.4%", "unit": "YoY", "context": "Annual operational expansion"},
-                            {"metric": "Efficiency Factor", "value": "94.2", "unit": "%", "context": "Process effectiveness"},
-                            {"metric": "Market Volume", "value": "620", "unit": "$M", "context": "Aggregate segment value"},
-                            {"metric": "Projected Impact", "value": "3.8x", "unit": "Multiple", "context": "Forward expectation"},
+                        data_points = [
+                            CanonicalDataPoint(
+                                metric=str(dp.get("metric", "Metric")),
+                                value=str(dp.get("value", "N/A")),
+                                unit=str(dp.get("unit") or "-"),
+                                context=str(dp.get("context") or "-"),
+                            )
+                            for dp in raw_dps[:10]
                         ]
 
-                    data_points = [
-                        CanonicalDataPoint(
-                            metric=str(dp.get("metric", "Metric")),
-                            value=str(dp.get("value", "N/A")),
-                            unit=str(dp.get("unit") or "-"),
-                            context=str(dp.get("context") or "-"),
+                        facts = [
+                            CanonicalFact(statement=str(f), confidence=0.95, evidence_status="verified")
+                            for f in canonical_data.get("facts", [])
+                            if isinstance(f, str)
+                        ]
+
+                        canonical = CanonicalContent(
+                            source_ids=["src_chat_prompt"],
+                            title=doc_title,
+                            context=context_text,
+                            intent=CanonicalIntent(
+                                primary_purpose=primary_purpose,
+                                target_audiences=["Decision Makers", "General Audience"],
+                                core_narrative=core_narrative,
+                            ),
+                            data_points=data_points,
+                            facts=facts,
+                            content_hash=canonical_hash,
                         )
-                        for dp in raw_dps[:10]
-                    ]
-
-                    facts = [
-                        CanonicalFact(statement=str(f), confidence=0.95, evidence_status="verified")
-                        for f in canonical_data.get("facts", [])
-                        if isinstance(f, str)
-                    ]
-
-                    canonical = CanonicalContent(
-                        source_ids=["src_chat_prompt"],
-                        title=doc_title,
-                        context=context_text,
-                        intent=CanonicalIntent(
-                            primary_purpose=primary_purpose,
-                            target_audiences=["Decision Makers", "General Audience"],
-                            core_narrative=core_narrative,
-                        ),
-                        data_points=data_points,
-                        facts=facts,
-                        content_hash=canonical_hash,
-                    )
 
                     # Authoritative D6 EngineRouter dispatch
                     artifact = self.engine_router.dispatch(
@@ -335,6 +486,12 @@ class LimoAgentRuntime:
                     else:
                         genoffice_prompt = f"Create a structured document on: {display_title}."
 
+                    # Ground in selective canonical slice if available
+                    selected_ctx = ContextSelector.select(context.unified_input)
+                    if selected_ctx.canonical_slice and selected_ctx.canonical_slice.get("facts"):
+                        facts_hint = "; ".join(selected_ctx.canonical_slice["facts"][:3])
+                        genoffice_prompt = f"{genoffice_prompt} Key points to incorporate: {facts_hint}"
+
                     logger.info(
                         "Executing native GenOffice deliverable generation for title='%s' (format=%s, prompt='%s')",
                         title_cand,
@@ -361,6 +518,188 @@ class LimoAgentRuntime:
                         session_id=session_id,
                         content=content,
                         mode=mode or FeatureMode.DOCS,
+                        artifact_ids=[artifact.id],
+                        execution_summary=summary,
+                    )
+                    return assistant_msg
+
+                # Branch 3c: Video Deliverables (D8.2 OpenMontage Video Engine via D6)
+                elif route.engine_type == EngineType.VIDEO_ENGINE or out_fmt == OutputFormat.VIDEO:
+                    # 1. Parse duration if requested in prompt (e.g. "30-second", "15 seconds", "45s")
+                    dur_match = re.search(r"\b(\d+)\s*(?:-|secs?|seconds?)\b", user_prompt.lower())
+                    target_dur = 30.0
+                    if dur_match:
+                        try:
+                            parsed_dur = float(dur_match.group(1))
+                            if 8.0 <= parsed_dur <= 300.0:
+                                target_dur = parsed_dur
+                        except (ValueError, TypeError):
+                            pass
+
+                    # 2. Extract clean, sanitized topic (strip commands, duration modifiers, format words)
+                    raw_topic = display_title
+                    clean_topic = re.sub(r"^(?:please\s+)?(?:create|make|generate|produce|build|draft)\s+(?:a|an)?\s*", "", raw_topic, flags=re.IGNORECASE)
+                    clean_topic = re.sub(r"\b(?:\d+)\s*(?:-|secs?|seconds?)\s*(?:video|clip|reel)?\s*(?:about|on|covering|explaining)?\b", "", clean_topic, flags=re.IGNORECASE)
+                    clean_topic = re.sub(r"^(?:video|clip|reel)\s+(?:about|on|covering|explaining)\s*", "", clean_topic, flags=re.IGNORECASE)
+                    clean_topic = re.sub(r"\b(?:video|clip|reel)\b", "", clean_topic, flags=re.IGNORECASE)
+                    clean_topic = " ".join(clean_topic.split()).strip().title()
+                    if not clean_topic:
+                        clean_topic = "Video Overview"
+
+                    logger.info("Executing video deliverable generation: raw='%s' -> clean_topic='%s' (target_dur=%.1fs)",
+                                display_title, clean_topic, target_dur)
+
+                    # 3. Check for article / content summarization requests
+                    article_key_points = []
+                    if "summariz" in user_prompt.lower() or len(user_prompt) > 150:
+                        sentences = [s.strip() for s in re.split(r"[.\n]+", user_prompt) if len(s.strip()) > 20]
+                        substantive = [s for s in sentences if not re.match(r"^(?:create|summarize|make|please|write)\b", s, re.IGNORECASE)]
+                        if substantive:
+                            article_key_points = substantive[:4]
+
+                    facts = [
+                        CanonicalFact(statement=pt, confidence=0.95, evidence_status="verified")
+                        for pt in article_key_points
+                    ] if article_key_points else [
+                        CanonicalFact(
+                            statement=f"{clean_topic} overview and core insights.",
+                            confidence=0.95,
+                            evidence_status="verified",
+                        )
+                    ]
+
+                    # 4. Build canonical content with clean topic
+                    if context.unified_input and context.unified_input.canonical_contents:
+                        canonical = context.unified_input.canonical_contents[0]
+                        clean_topic = canonical.title or clean_topic
+                    else:
+                        canonical = CanonicalContent(
+                            source_ids=["src_chat_prompt"],
+                            title=clean_topic,
+                            context=f"Synthesized video briefing on {clean_topic}.",
+                            intent=CanonicalIntent(
+                                primary_purpose=f"Provide an engaging, informative video on {clean_topic}.",
+                                target_audiences=["General Audience"],
+                                core_narrative=f"Core insights, visual narrative, and significance of {clean_topic}.",
+                            ),
+                            facts=facts,
+                            content_hash=canonical_hash,
+                        )
+
+                    planned_deliv.title = clean_topic
+                    planned_deliv.options = planned_deliv.options or {}
+                    planned_deliv.options["user_directive"] = user_prompt
+
+                    # 5. Create persistent TransformationJob for full lifecycle tracking
+                    job = self.job_svc.create_job(
+                        project_id=project_id,
+                        session_id=session_id,
+                        requested_formats=[OutputFormat.VIDEO],
+                        prompt=user_prompt,
+                    )
+
+                    # Forward selected voice to video options
+                    v_prov = voice_config.get("provider") if voice_config else None
+                    v_id = (voice_config.get("voice_id") or voice_config.get("voice")) if voice_config else None
+
+                    # 4. Dispatch through authoritative D6 EngineRouter
+                    artifact = await asyncio.to_thread(
+                        self.engine_router.dispatch,
+                        route=route,
+                        deliverable=planned_deliv,
+                        canonical=canonical,
+                        config=GenerationConfig(
+                            video=VideoOptions(
+                                target_duration_sec=target_dur,
+                                aspect_ratio="16:9",
+                                voice_provider=v_prov,
+                                voice_id=v_id,
+                            ),
+                        ),
+                        project_id=project_id,
+                        job_id=job.id,
+                    )
+
+                    dur_info = artifact.metadata.get("duration_seconds", target_dur) if artifact.metadata else target_dur
+                    summary = f"Generated {dur_info}s video '{artifact.title}.mp4' via D6 and OpenMontage isolated runner."
+                    content = (
+                        f"I have created your video: **{artifact.title}{artifact.file_format}**.\n\n"
+                        f"The video was produced using OpenMontage across an isolated subprocess with narration, visual assets, and full composition.\n\n"
+                        f"You can view the video deliverable card below and download `{artifact.title}{artifact.file_format}` directly."
+                    )
+
+                    assistant_msg = self.chat_svc.add_assistant_message(
+                        session_id=session_id,
+                        content=content,
+                        mode=mode or FeatureMode.VIDEO,
+                        artifact_ids=[artifact.id],
+                        execution_summary=summary,
+                    )
+                    return assistant_msg
+
+                # Branch 3d: Standalone Audio Deliverables (Phase D8.3 TTS Service)
+                elif route.engine_type == EngineType.TTS_ENGINE or out_fmt == OutputFormat.AUDIO or resolution.target_format == TargetFormat.AUDIO:
+                    selected_provider = voice_config.get("provider") if voice_config else None
+                    selected_voice = (voice_config.get("voice_id") or voice_config.get("voice")) if voice_config else None
+                    speed_val = float(voice_config.get("speed", 1.0)) if voice_config else 1.0
+
+                    m_voice = re.search(r"\b(?:using|with)\s+(?:voice\s+)?([a-zA-Z0-9_-]+)\b", user_prompt, re.IGNORECASE)
+                    if m_voice and not selected_voice:
+                        selected_voice = m_voice.group(1).strip()
+
+                    _, body = self.intent_resolver._extract_directive_and_body(user_prompt)
+                    if body and len(body.strip()) > 5:
+                        narration_text = body.strip()
+                    elif context.unified_input and context.unified_input.canonical_contents:
+                        can = context.unified_input.canonical_contents[0]
+                        facts_str = " ".join(f.statement for f in can.facts[:3] if f.statement)
+                        narration_text = f"{can.intent.core_narrative} {facts_str}".strip()
+                    elif context.unified_input and context.unified_input.extracted_documents:
+                        doc = context.unified_input.extracted_documents[0]
+                        narration_text = doc.text_content[:1500].strip()
+                    else:
+                        clean_text = re.sub(
+                            r"^(?:please\s+)?(?:read\s+(?:this\s+)?aloud|synthesize\s+(?:speech|audio|voice)|generate\s+narration|create\s+audio)\s*(?:using\s+[\w\-]+\s*)?(?:on|for|about|:|to)?\s*",
+                            "",
+                            user_prompt,
+                            flags=re.IGNORECASE,
+                        ).strip()
+                        narration_text = clean_text if len(clean_text) > 3 else f"Overview narration on {display_title}."
+
+                    logger.info(
+                        "Synthesizing standalone audio deliverable: title='%s', voice='%s', provider='%s', len=%d",
+                        display_title,
+                        selected_voice,
+                        selected_provider,
+                        len(narration_text),
+                    )
+
+                    artifact = await asyncio.to_thread(
+                        tts_service.synthesize,
+                        text=narration_text,
+                        voice=selected_voice,
+                        provider=selected_provider,
+                        speed=speed_val,
+                        title=display_title,
+                        project_id=project_id,
+                        session_id=session_id,
+                    )
+
+                    dur_val = artifact.metadata.get("duration_seconds")
+                    dur_str = f"{dur_val:.1f}s" if dur_val else "audio"
+                    v_name = artifact.metadata.get("voice_name") or artifact.metadata.get("voice_id") or "Voice"
+                    p_name = artifact.metadata.get("provider", "tts")
+                    summary = f"Generated {dur_str} speech narration '{artifact.title}.mp3' using {v_name} ({p_name})."
+                    content = (
+                        f"I have generated your audio narration: **{artifact.title}{artifact.file_format}**.\n\n"
+                        f"**Voice:** {v_name} ({p_name.upper()})\n\n"
+                        f"You can listen to the audio below or download the MP3 directly."
+                    )
+
+                    assistant_msg = self.chat_svc.add_assistant_message(
+                        session_id=session_id,
+                        content=content,
+                        mode=mode or FeatureMode.AUDIO,
                         artifact_ids=[artifact.id],
                         execution_summary=summary,
                     )

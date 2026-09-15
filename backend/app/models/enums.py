@@ -15,6 +15,7 @@ class FeatureMode(StrEnum):
     SLIDES = "slides"
     SHEETS = "sheets"
     VIDEO = "video"
+    AUDIO = "audio"
     WEBSITES = "websites"
     CODE = "code"
 
@@ -33,6 +34,7 @@ class OutputFormat(StrEnum):
     MARKDOWN = "markdown"
     HTML = "html"
     PDF = "pdf"
+    AUDIO = "audio"
 
 
 class SourceType(StrEnum):
@@ -111,6 +113,7 @@ class ArtifactType(StrEnum):
     CODE = "code"
     POST = "post"
     INFOGRAPHIC = "infographic"
+    AUDIO = "audio"
 
 
 class ValidationStatus(StrEnum):

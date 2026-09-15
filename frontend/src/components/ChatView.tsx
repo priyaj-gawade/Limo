@@ -10,22 +10,29 @@ import {
   Table,
   Video,
   Globe,
+  Paperclip,
+  Share2,
   Code2,
   Download,
   ExternalLink,
   Copy,
   RotateCcw,
-  Paperclip,
-  Share2
+  Volume2
 } from 'lucide-react';
 import { Composer } from './Composer';
+import { VideoPlayerCard } from './VideoPlayerCard';
 import { ChatSession, Artifact, FeatureMode, ModelSpeed, AttachmentFile } from '../types';
 
 interface ChatViewProps {
   session: ChatSession;
   activeMode: FeatureMode;
   onSelectMode: (mode: FeatureMode) => void;
-  onSend: (text: string, attachments: AttachmentFile[], speed: ModelSpeed) => void;
+  onSend: (
+    text: string,
+    attachments: AttachmentFile[],
+    speed: ModelSpeed,
+    voiceConfig?: { provider: string; voice_id: string; speed?: number }
+  ) => void;
   isGenerating: boolean;
   onOpenInWorkspace: (artifact: Artifact) => void;
   onDownloadArtifact?: (artifact: Artifact) => void;
@@ -64,6 +71,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
         return <Table size={18} className="artifact-icon-sheet" />;
       case 'video':
         return <Video size={18} className="artifact-icon-video" />;
+      case 'audio':
+        return <Volume2 size={18} className="artifact-icon-audio" />;
       case 'website':
         return <Globe size={18} className="artifact-icon-website" />;
       case 'code':
@@ -185,64 +194,95 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   {/* Interactive Artifact Cards */}
                   {!isUser && message.artifacts && message.artifacts.length > 0 && (
                     <div className="artifacts-grid">
-                      {message.artifacts.map((art) => (
-                        <div key={art.id} className="artifact-card">
-                          {/* Top Row: Title & Format/Size Badge */}
-                          <div className="artifact-header-row">
-                            <div className="artifact-header-left">
-                              <span className="artifact-icon-mini">{getArtifactIcon(art.type)}</span>
-                              <h4 className="artifact-title" title={art.title}>{art.title}</h4>
-                            </div>
-                            <span className="format-badge">{formatBadge(art)}</span>
-                          </div>
+                      {message.artifacts.map((art) => {
+                        if (art.type === 'video') {
+                          return (
+                            <VideoPlayerCard
+                              key={art.id}
+                              artifact={art}
+                              onDownloadArtifact={onDownloadArtifact}
+                            />
+                          );
+                        }
 
-                          {/* Middle Row: Safe Subagent Summary */}
-                          {(message.executionSummary || art.description) && (
-                            <p className="artifact-subagent-summary">
-                              {message.executionSummary || art.description}
-                            </p>
-                          )}
-
-                          {/* Bottom Row: [ Edit ]  [ THUMBNAIL ] */}
-                          <div className="artifact-action-row">
-                            <button
-                              className="artifact-edit-pill"
-                              onClick={() => onOpenInWorkspace(art)}
-                              title="Open document in GenOffice workspace"
-                            >
-                              Edit
-                            </button>
-
-                            <div
-                              className="artifact-thumbnail-container"
-                              onClick={() => onDownloadArtifact && onDownloadArtifact(art)}
-                              title="Click to download document"
-                            >
-                              <img
-                                src={art.thumbnailUrl || `/api/v1/artifacts/${art.id}/thumbnail`}
-                                alt={art.title}
-                                className="artifact-thumbnail-img"
-                                onError={(e) => {
-                                  (e.currentTarget as HTMLElement).style.display = 'none';
-                                  const fallback = (e.currentTarget.parentElement?.querySelector(
-                                    '.artifact-thumbnail-fallback'
-                                  ) as HTMLElement | null);
-                                  if (fallback) fallback.style.display = 'flex';
-                                }}
-                              />
-                              <div className="artifact-thumbnail-fallback" style={{ display: 'none' }}>
-                                {getArtifactIcon(art.type)}
-                                <span className="fallback-ext">{(art.fileFormat || '').toUpperCase().replace(/^\./, '')}</span>
+                        return (
+                          <div key={art.id} className="artifact-card">
+                            {/* Top Row: Title & Format/Size Badge */}
+                            <div className="artifact-header-row">
+                              <div className="artifact-header-left">
+                                <span className="artifact-icon-mini">{getArtifactIcon(art.type)}</span>
+                                <h4 className="artifact-title" title={art.title}>{art.title}</h4>
                               </div>
-                              <div className="artifact-thumbnail-overlay">
-                                <div className="thumbnail-download-circle">
-                                  <Download size={18} />
+                              <span className="format-badge">{formatBadge(art)}</span>
+                            </div>
+
+                            {/* Middle Row: Safe Subagent Summary */}
+                            {(message.executionSummary || art.description) && (
+                              <p className="artifact-subagent-summary">
+                                {message.executionSummary || art.description}
+                              </p>
+                            )}
+
+                            {/* Bottom Row: [ Audio Player ] or [ Edit + THUMBNAIL ] */}
+                            {art.type === 'audio' ? (
+                              <div className="audio-artifact-player-row">
+                                <audio
+                                  controls
+                                  src={`/api/v1/artifacts/${art.id}/download`}
+                                  className="limo-audio-player"
+                                  preload="metadata"
+                                />
+                                <button
+                                  className="artifact-download-pill"
+                                  onClick={() => onDownloadArtifact && onDownloadArtifact(art)}
+                                  title="Download MP3"
+                                >
+                                  <Download size={13} />
+                                  <span>Download</span>
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="artifact-action-row">
+                                <button
+                                  className="artifact-edit-pill"
+                                  onClick={() => onOpenInWorkspace(art)}
+                                  title="Open document in GenOffice workspace"
+                                >
+                                  Edit
+                                </button>
+
+                                <div
+                                  className="artifact-thumbnail-container"
+                                  onClick={() => onDownloadArtifact && onDownloadArtifact(art)}
+                                  title="Click to download document"
+                                >
+                                  <img
+                                    src={art.thumbnailUrl || `/api/v1/artifacts/${art.id}/thumbnail`}
+                                    alt={art.title}
+                                    className="artifact-thumbnail-img"
+                                    onError={(e) => {
+                                      (e.currentTarget as HTMLElement).style.display = 'none';
+                                      const fallback = (e.currentTarget.parentElement?.querySelector(
+                                        '.artifact-thumbnail-fallback'
+                                      ) as HTMLElement | null);
+                                      if (fallback) fallback.style.display = 'flex';
+                                    }}
+                                  />
+                                  <div className="artifact-thumbnail-fallback" style={{ display: 'none' }}>
+                                    {getArtifactIcon(art.type)}
+                                    <span className="fallback-ext">{(art.fileFormat || '').toUpperCase().replace(/^\./, '')}</span>
+                                  </div>
+                                  <div className="artifact-thumbnail-overlay">
+                                    <div className="thumbnail-download-circle">
+                                      <Download size={18} />
+                                    </div>
+                                  </div>
                                 </div>
                               </div>
-                            </div>
+                            )}
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
 
@@ -606,8 +646,45 @@ export const ChatView: React.FC<ChatViewProps> = ({
         .artifact-icon-slide { color: #facc15; }
         .artifact-icon-sheet { color: #4ade80; }
         .artifact-icon-video { color: #c084fc; }
+        .artifact-icon-audio { color: #f59e0b; }
         .artifact-icon-website { color: #38bdf8; }
         .artifact-icon-code { color: #fb923c; }
+
+        .audio-artifact-player-row {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-top: 10px;
+          width: 100%;
+        }
+
+        .limo-audio-player {
+          flex: 1;
+          height: 36px;
+          border-radius: var(--radius-pill);
+          outline: none;
+        }
+
+        .artifact-download-pill {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          background: rgba(255, 255, 255, 0.08);
+          border: 1px solid rgba(255, 255, 255, 0.14);
+          border-radius: var(--radius-pill);
+          color: var(--text-primary);
+          font-size: 12px;
+          font-weight: 500;
+          padding: 6px 12px;
+          cursor: pointer;
+          transition: all 0.14s ease;
+          white-space: nowrap;
+        }
+
+        .artifact-download-pill:hover {
+          background: rgba(255, 255, 255, 0.15);
+          border-color: rgba(255, 255, 255, 0.25);
+        }
 
         .artifact-title {
           font-size: 14px;
