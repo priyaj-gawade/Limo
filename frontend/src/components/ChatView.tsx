@@ -4,7 +4,6 @@ import {
   ChevronRight,
   Brain,
   CheckCircle2,
-  Sparkles,
   FileText,
   Presentation,
   Table,
@@ -26,9 +25,9 @@ import { MarkdownMessage } from './MarkdownMessage';
 import { useToast } from '../context/ToastContext';
 import { ChatSession, Artifact, FeatureMode, ModelSpeed, AttachmentFile } from '../types';
 import { getFileCategory, getCategorySubtitle, renderAttachmentBadge } from '../utils/attachmentUtils';
-import { Blobatar } from '@blobatar/react';
-import { happy } from 'blobatar/expression';
-import 'blobatar/motion.css';
+import { LimoMascot } from './LimoMascot';
+import { ThinkingTextAnimation } from './ThinkingTextAnimation';
+import { LimoAudioPlayer } from './LimoAudioPlayer';
 
 interface ChatViewProps {
   session: ChatSession;
@@ -239,14 +238,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <div key={message.id} className="message-row assistant-turn">
                 <div className="limo-mascot-col">
                   <div className="limo-mascot-wrap" title="Limo">
-                    <Blobatar
-                      name="Limo"
-                      traits={{ shape: 0.65 }}
-                      hue={225}
-                      expression={happy}
-                      animate="hover"
-                      size={36}
-                    />
+                    <LimoMascot size={42} />
                   </div>
                 </div>
 
@@ -345,6 +337,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
                           );
                         }
 
+                        if (art.type === 'audio') {
+                          return (
+                            <LimoAudioPlayer
+                              key={art.id}
+                              src={`/api/v1/artifacts/${art.id}/download`}
+                              onDownload={() => onDownloadArtifact && onDownloadArtifact(art)}
+                            />
+                          );
+                        }
+
                         return (
                           <div key={art.id} className="artifact-card">
                             {/* Top Row: Title & Format/Size Badge */}
@@ -363,63 +365,44 @@ export const ChatView: React.FC<ChatViewProps> = ({
                               </p>
                             )}
 
-                            {/* Bottom Row: [ Audio Player ] or [ Edit + THUMBNAIL ] */}
-                            {art.type === 'audio' ? (
-                              <div className="audio-artifact-player-row">
-                                <audio
-                                  controls
-                                  src={`/api/v1/artifacts/${art.id}/download`}
-                                  className="limo-audio-player"
-                                  preload="metadata"
-                                />
-                                <button
-                                  className="artifact-download-pill"
-                                  onClick={() => onDownloadArtifact && onDownloadArtifact(art)}
-                                  title="Download MP3"
-                                >
-                                  <Download size={13} />
-                                  <span>Download</span>
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="artifact-action-row">
-                                <button
-                                  className="artifact-edit-pill"
-                                  onClick={() => onOpenInWorkspace(art)}
-                                  title="Open document in GenOffice workspace"
-                                >
-                                  Edit
-                                </button>
+                            {/* Bottom Row: [ Edit + THUMBNAIL ] */}
+                            <div className="artifact-action-row">
+                              <button
+                                className="artifact-edit-pill"
+                                onClick={() => onOpenInWorkspace(art)}
+                                title="Open document in GenOffice workspace"
+                              >
+                                Edit
+                              </button>
 
-                                <div
-                                  className="artifact-thumbnail-container"
-                                  onClick={() => onDownloadArtifact && onDownloadArtifact(art)}
-                                  title="Click to download document"
-                                >
-                                  <img
-                                    src={art.thumbnailUrl || `/api/v1/artifacts/${art.id}/thumbnail`}
-                                    alt={art.title}
-                                    className="artifact-thumbnail-img"
-                                    onError={(e) => {
-                                      (e.currentTarget as HTMLElement).style.display = 'none';
-                                      const fallback = (e.currentTarget.parentElement?.querySelector(
-                                        '.artifact-thumbnail-fallback'
-                                      ) as HTMLElement | null);
-                                      if (fallback) fallback.style.display = 'flex';
-                                    }}
-                                  />
-                                  <div className="artifact-thumbnail-fallback" style={{ display: 'none' }}>
-                                    {getArtifactIcon(art.type)}
-                                    <span className="fallback-ext">{(art.fileFormat || '').toUpperCase().replace(/^\./, '')}</span>
-                                  </div>
-                                  <div className="artifact-thumbnail-overlay">
-                                    <div className="thumbnail-download-circle">
-                                      <Download size={18} />
-                                    </div>
+                              <div
+                                className="artifact-thumbnail-container"
+                                onClick={() => onDownloadArtifact && onDownloadArtifact(art)}
+                                title="Click to download document"
+                              >
+                                <img
+                                  src={art.thumbnailUrl || `/api/v1/artifacts/${art.id}/thumbnail`}
+                                  alt={art.title}
+                                  className="artifact-thumbnail-img"
+                                  onError={(e) => {
+                                    (e.currentTarget as HTMLElement).style.display = 'none';
+                                    const fallback = (e.currentTarget.parentElement?.querySelector(
+                                      '.artifact-thumbnail-fallback'
+                                    ) as HTMLElement | null);
+                                    if (fallback) fallback.style.display = 'flex';
+                                  }}
+                                />
+                                <div className="artifact-thumbnail-fallback" style={{ display: 'none' }}>
+                                  {getArtifactIcon(art.type)}
+                                  <span className="fallback-ext">{(art.fileFormat || '').toUpperCase().replace(/^\./, '')}</span>
+                                </div>
+                                <div className="artifact-thumbnail-overlay">
+                                  <div className="thumbnail-download-circle">
+                                    <Download size={18} />
                                   </div>
                                 </div>
                               </div>
-                            )}
+                            </div>
                           </div>
                         );
                       })}
@@ -453,23 +436,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           {/* Real State Loading Indicator (active during isGenerating) */}
           {isGenerating && (
-            <div className="message-row assistant-turn animate-fade-in">
+            <div className="message-row assistant-turn generating-turn animate-fade-in">
               <div className="limo-mascot-col">
-                <div className="limo-mascot-wrap animate-pulse-subtle" title="Limo">
-                  <Blobatar
-                    name="Limo"
-                    traits={{ shape: 0.65 }}
-                    hue={225}
-                    expression={happy}
-                    animate="hover"
-                    size={36}
-                  />
+                <div className="limo-mascot-wrap" title="Limo">
+                  <LimoMascot size={42} isGenerating={true} />
                 </div>
               </div>
               <div className="assistant-content-col">
                 <div className="generating-indicator">
-                  <Sparkles size={16} className="generating-sparkle" />
-                  <span>Processing prompt...</span>
+                  <ThinkingTextAnimation />
                 </div>
               </div>
             </div>
@@ -750,8 +725,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
         }
 
         .limo-mascot-wrap {
-          width: 36px;
-          height: 36px;
+          width: 42px;
+          height: 42px;
           border-radius: 50%;
           overflow: hidden;
           display: flex;
@@ -759,16 +734,32 @@ export const ChatView: React.FC<ChatViewProps> = ({
           justify-content: center;
           cursor: pointer;
           transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+          flex-shrink: 0;
         }
 
         .limo-mascot-wrap:hover {
-          transform: scale(1.1);
+          transform: scale(1.08);
         }
 
         .limo-mascot-wrap svg {
-          width: 36px;
-          height: 36px;
+          width: 42px;
+          height: 42px;
           display: block;
+        }
+
+        .message-row.assistant-turn.generating-turn {
+          align-items: center;
+        }
+
+        .generating-turn .limo-mascot-col {
+          padding-top: 0;
+          align-items: center;
+          height: 42px;
+        }
+
+        .generating-turn .assistant-content-col {
+          justify-content: center;
+          gap: 0;
         }
 
         .assistant-content-col {
@@ -923,42 +914,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
         .artifact-icon-image { color: #ec4899; }
         .artifact-icon-website { color: #38bdf8; }
         .artifact-icon-code { color: #fb923c; }
-
-        .audio-artifact-player-row {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          margin-top: 10px;
-          width: 100%;
-        }
-
-        .limo-audio-player {
-          flex: 1;
-          height: 36px;
-          border-radius: var(--radius-pill);
-          outline: none;
-        }
-
-        .artifact-download-pill {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          background: var(--bg-pill);
-          border: 1px solid var(--border-medium);
-          border-radius: var(--radius-pill);
-          color: var(--text-primary);
-          font-size: 12px;
-          font-weight: 500;
-          padding: 6px 12px;
-          cursor: pointer;
-          transition: all 0.14s ease;
-          white-space: nowrap;
-        }
-
-        .artifact-download-pill:hover {
-          background: var(--bg-pill-hover);
-          border-color: var(--border-focus);
-        }
 
         .artifact-title {
           font-size: 14px;
@@ -1221,19 +1176,65 @@ export const ChatView: React.FC<ChatViewProps> = ({
         .generating-indicator {
           display: flex;
           align-items: center;
-          gap: 10px;
-          color: var(--text-secondary);
-          font-size: 13.5px;
+          min-height: 42px;
+          line-height: 1;
         }
 
-        .generating-sparkle {
-          color: #60a5fa;
-          animation: spin 3s linear infinite;
+        .thinking-text-stream {
+          display: inline-flex;
+          align-items: center;
+          user-select: none;
         }
 
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
+        .thinking-text-shimmer {
+          font-size: 14.5px;
+          font-weight: 500;
+          letter-spacing: -0.01em;
+          background: linear-gradient(
+            90deg,
+            var(--text-secondary) 0%,
+            #60a5fa 35%,
+            #a78bfa 50%,
+            var(--text-secondary) 70%
+          );
+          background-size: 200% auto;
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          animation: textShimmer 3s ease-in-out infinite;
+          display: inline-block;
+          transition: opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1), transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        [data-theme="light"] .thinking-text-shimmer {
+          background: linear-gradient(
+            90deg,
+            #475569 0%,
+            #2563eb 35%,
+            #7c3aed 50%,
+            #475569 70%
+          );
+          background-size: 200% auto;
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+        }
+
+        .thinking-text-shimmer.phase-fading {
+          opacity: 0;
+          transform: translateY(2px);
+        }
+
+        .thinking-text-shimmer.phase-visible {
+          opacity: 1;
+          transform: translateY(0);
+        }
+
+        @keyframes textShimmer {
+          0% {
+            background-position: 100% center;
+          }
+          100% {
+            background-position: -100% center;
+          }
         }
 
         .chat-bottom-composer-wrap {

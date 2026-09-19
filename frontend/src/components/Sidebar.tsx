@@ -8,6 +8,7 @@ import {
   Table,
   Video,
   Volume2,
+  Image as ImageIcon,
   Globe,
   Code2,
   MessageSquare,
@@ -60,6 +61,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'sheets', label: 'Sheets', icon: <Table size={17} />, isCore: true },
     { id: 'video', label: 'Video', icon: <Video size={17} />, isCore: true },
     { id: 'audio', label: 'Audio', icon: <Volume2 size={17} />, isCore: true },
+    { id: 'image', label: 'Image', icon: <ImageIcon size={17} />, isCore: true },
     { id: 'websites', label: 'Websites', icon: <Globe size={17} />, isCore: false },
     { id: 'code', label: 'Code', icon: <Code2 size={17} />, isCore: false },
   ];
@@ -68,32 +70,47 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside className={`limo-sidebar ${collapsed ? 'collapsed' : 'expanded'}`}>
       {/* Sidebar Header */}
       <div className="sidebar-header">
-        <div className="brand-badge" onClick={onNewChat} title="Limo Conversational AI">
-          <div className="brand-logo-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4 4v16h16" />
-              <polyline points="4 12 12 12 20 4" />
-            </svg>
-          </div>
-          {!collapsed && <span className="brand-title">Limo</span>}
-        </div>
+        {collapsed ? (
+          <button
+            className="collapse-toggle-btn collapsed-toggle"
+            onClick={onToggleCollapse}
+            title="Expand sidebar"
+            aria-label="Expand sidebar"
+          >
+            <PanelLeft size={18} />
+          </button>
+        ) : (
+          <>
+            <div className="brand-badge" onClick={onNewChat} title="Limo Conversational AI">
+              <div className="brand-logo-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 4v16h16" />
+                  <polyline points="4 12 12 12 20 4" />
+                </svg>
+              </div>
+              <span className="brand-title">Limo</span>
+            </div>
 
-        <button
-          className="collapse-toggle-btn"
-          onClick={onToggleCollapse}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        >
-          {collapsed ? <PanelLeft size={17} /> : <PanelLeftClose size={17} />}
-        </button>
+            <button
+              className="collapse-toggle-btn"
+              onClick={onToggleCollapse}
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+            >
+              <PanelLeftClose size={17} />
+            </button>
+          </>
+        )}
       </div>
 
       {/* Switcher inserted at top of side navbar */}
       <div className="sidebar-switch-wrapper">
-        <div className={`sidebar-view-toggle ${collapsed ? 'collapsed' : ''}`}>
+        <div className={`sidebar-view-toggle ${collapsed ? 'collapsed' : ''}`} role="tablist">
           <button
             className={`sidebar-toggle-btn ${currentView === 'limo' ? 'active' : ''}`}
             onClick={() => onViewChange('limo')}
             title="Limo"
+            aria-label="Limo"
           >
             <MessageSquare size={14} />
             {!collapsed && <span>Limo</span>}
@@ -105,6 +122,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               else onViewChange('genoffice');
             }}
             title="GenOffice"
+            aria-label="GenOffice"
           >
             <LayoutGrid size={14} />
             {!collapsed && <span>GenOffice</span>}
@@ -249,6 +267,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           border-bottom: 1px solid var(--border-subtle);
         }
 
+        .limo-sidebar.collapsed .sidebar-header {
+          padding: 0;
+          justify-content: center;
+        }
+
         .brand-badge {
           display: flex;
           align-items: center;
@@ -294,12 +317,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
           background: var(--bg-sidebar-hover);
         }
 
+        .limo-sidebar.collapsed .collapse-toggle-btn {
+          width: 40px;
+          height: 40px;
+          padding: 0;
+          border-radius: var(--radius-md);
+        }
+
         .sidebar-switch-wrapper {
           padding: 10px 14px 4px 14px;
         }
 
         .limo-sidebar.collapsed .sidebar-switch-wrapper {
-          padding: 8px 8px 4px 8px;
+          padding: 10px 0 6px 0;
+          display: flex;
+          justify-content: center;
         }
 
         .sidebar-view-toggle {
@@ -310,14 +342,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           border-radius: var(--radius-pill);
           padding: 3px;
           gap: 2px;
+          position: relative;
         }
 
         .sidebar-view-toggle.collapsed {
           flex-direction: column;
-          background: transparent;
-          border: none;
-          padding: 0;
+          background: var(--bg-pill);
+          border: 1px solid var(--border-subtle);
+          border-radius: 24px;
+          padding: 4px;
           gap: 4px;
+          width: 40px;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
         }
 
         .sidebar-toggle-btn {
@@ -334,7 +370,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           font-size: 12px;
           font-weight: 500;
           cursor: pointer;
-          transition: all 0.15s ease;
+          transition: all 0.16s ease;
           white-space: nowrap;
         }
 
@@ -351,18 +387,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }
 
         .sidebar-view-toggle.collapsed .sidebar-toggle-btn {
-          width: 38px;
+          width: 32px;
           height: 32px;
-          border-radius: 8px;
+          border-radius: 50%;
           padding: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex: none;
+        }
+
+        .sidebar-view-toggle.collapsed .sidebar-toggle-btn:hover:not(.active) {
+          color: var(--text-primary);
+          background: var(--bg-sidebar-hover);
         }
 
         .sidebar-view-toggle.collapsed .sidebar-toggle-btn.active {
           background: var(--bg-sidebar-active);
+          color: var(--text-primary);
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
         }
 
         .new-chat-wrapper {
           padding: 12px 14px;
+        }
+
+        .limo-sidebar.collapsed .new-chat-wrapper {
+          padding: 6px 0;
+          display: flex;
+          justify-content: center;
         }
 
         .new-chat-btn {
@@ -381,6 +434,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
           transition: all 0.15s ease;
         }
 
+        .limo-sidebar.collapsed .new-chat-btn {
+          width: 40px;
+          height: 40px;
+          padding: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: var(--radius-md);
+        }
+
         .new-chat-btn:hover {
           background: var(--bg-pill-hover);
           border-color: var(--border-focus);
@@ -390,6 +453,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           display: flex;
           align-items: center;
           gap: 9px;
+        }
+
+        .limo-sidebar.collapsed .new-chat-icon-text {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 100%;
+          gap: 0;
         }
 
         .shortcut-badge {
@@ -411,10 +482,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
           gap: 18px;
         }
 
+        .limo-sidebar.collapsed .sidebar-scrollable-content {
+          padding: 0;
+          align-items: center;
+        }
+
         .nav-group {
           display: flex;
           flex-direction: column;
           gap: 3px;
+        }
+
+        .limo-sidebar.collapsed .nav-group {
+          align-items: center;
+          width: 100%;
         }
 
         .nav-item {
@@ -434,6 +515,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
           transition: all 0.12s ease;
         }
 
+        .limo-sidebar.collapsed .nav-item {
+          width: 40px;
+          height: 40px;
+          padding: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          margin: 0 auto;
+        }
+
         .nav-item:hover {
           background: var(--bg-sidebar-hover);
           color: var(--text-primary);
@@ -449,6 +540,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           flex-shrink: 0;
           color: var(--text-muted);
           transition: color 0.12s ease;
+        }
+
+        .limo-sidebar.collapsed .nav-icon {
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
 
         .nav-item:hover .nav-icon,
@@ -560,11 +657,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
           flex-shrink: 0;
         }
 
+        .limo-sidebar.collapsed .sidebar-footer {
+          padding: 0;
+          justify-content: center;
+        }
+
         .profile-container {
           display: flex;
           align-items: center;
           gap: 10px;
           cursor: pointer;
+        }
+
+        .limo-sidebar.collapsed .profile-container {
+          justify-content: center;
         }
 
         .avatar-circle {

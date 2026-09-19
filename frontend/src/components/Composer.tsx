@@ -14,7 +14,8 @@ import {
   Paperclip,
   Loader2,
   Check,
-  Volume2
+  Volume2,
+  Image as ImageIcon
 } from 'lucide-react';
 import { FeatureMode, ModelSpeed, AttachmentFile, VoiceOption, VoiceCatalogResponse } from '../types';
 import { getFileCategory, getCategorySubtitle, renderAttachmentBadge } from '../utils/attachmentUtils';
@@ -220,6 +221,8 @@ export const Composer: React.FC<ComposerProps> = ({
         return { label: 'Video', icon: <Video size={13} />, placeholder: 'Describe video topic, storyboard concept, duration, and tone...' };
       case 'audio':
         return { label: 'Audio', icon: <Volume2 size={13} />, placeholder: 'Describe the audio topic, voice narration script, or paste text to read aloud...' };
+      case 'image':
+        return { label: 'Image', icon: <ImageIcon size={13} />, placeholder: 'Describe the image, infographic, or visual to generate...' };
       case 'websites':
         return { label: 'Websites', icon: <Globe size={13} />, placeholder: 'Describe the website, web page, or application interface to create...' };
       case 'code':

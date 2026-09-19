@@ -108,6 +108,7 @@ class TransformationConfigResolver:
                 FeatureMode.DOCS: [OutputFormat.DOCUMENT],
                 FeatureMode.VIDEO: [OutputFormat.VIDEO],
                 FeatureMode.AUDIO: [OutputFormat.AUDIO],
+                FeatureMode.IMAGE: [OutputFormat.INFOGRAPHIC],
             }
             if active_mode in mode_map:
                 return mode_map[active_mode]

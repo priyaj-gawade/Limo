@@ -54,6 +54,9 @@ docs/
 docs/**
 **/docs/
 **/docs/**
+prismo-limo-handoff/
+prismo-limo-handoff/**
+**/prismo-limo-handoff/**
 
 # 5. Generated Media, Renders & Scratch Workspace
 *.mp4

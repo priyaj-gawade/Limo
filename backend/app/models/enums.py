@@ -16,6 +16,7 @@ class FeatureMode(StrEnum):
     SHEETS = "sheets"
     VIDEO = "video"
     AUDIO = "audio"
+    IMAGE = "image"
     WEBSITES = "websites"
     CODE = "code"
 

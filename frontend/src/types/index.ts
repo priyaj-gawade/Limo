@@ -11,6 +11,7 @@ export type FeatureMode =
   | 'sheets'
   | 'video'
   | 'audio'
+  | 'image'
   | 'websites'
   | 'code';
 

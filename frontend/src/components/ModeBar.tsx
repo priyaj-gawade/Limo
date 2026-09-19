@@ -5,6 +5,7 @@ import {
   Table,
   Video,
   Volume2,
+  Image as ImageIcon,
   Globe,
   Code2
 } from 'lucide-react';
@@ -22,6 +23,7 @@ export const ModeBar: React.FC<ModeBarProps> = ({ activeMode, onSelectMode }) =>
     { id: 'sheets', label: 'Sheets', icon: <Table size={14} /> },
     { id: 'video', label: 'Video', icon: <Video size={14} /> },
     { id: 'audio', label: 'Audio', icon: <Volume2 size={14} /> },
+    { id: 'image', label: 'Image', icon: <ImageIcon size={14} /> },
     { id: 'websites', label: 'Websites', icon: <Globe size={14} /> },
     { id: 'code', label: 'Code', icon: <Code2 size={14} /> },
   ];
