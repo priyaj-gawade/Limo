@@ -13,9 +13,12 @@ import {
   MessageSquare,
   LayoutGrid,
   ArrowDownToLine,
-  Trash2
+  Trash2,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { FeatureMode, ChatSession } from '../types';
+import { useToast } from '../context/ToastContext';
 
 interface SidebarProps {
   collapsed: boolean;
@@ -30,6 +33,8 @@ interface SidebarProps {
   onSelectSession: (id: string) => void;
   onNewChat: () => void;
   onDeleteSession: (id: string, e: React.MouseEvent) => void;
+  theme: 'light' | 'dark';
+  onToggleTheme: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -44,8 +49,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeSessionId,
   onSelectSession,
   onNewChat,
-  onDeleteSession
+  onDeleteSession,
+  theme,
+  onToggleTheme
 }) => {
+  const { showToast } = useToast();
   const creationModes: { id: FeatureMode; label: string; icon: React.ReactNode; isCore: boolean }[] = [
     { id: 'docs', label: 'Docs', icon: <FileText size={17} />, isCore: true },
     { id: 'slides', label: 'Slides', icon: <Presentation size={17} />, isCore: true },
@@ -182,10 +190,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {!collapsed && (
           <div className="footer-actions">
-            <button className="mini-upgrade-btn" onClick={() => alert('Limo Pro: High reasoning & multi-modal processing')}>
-              Upgrade
+            <button
+              className="theme-toggle-pill"
+              onClick={onToggleTheme}
+              title={theme === 'dark' ? "Switch to Light mode" : "Switch to Dark mode"}
+              aria-label={theme === 'dark' ? "Switch to Light mode" : "Switch to Dark mode"}
+            >
+              {theme === 'dark' ? (
+                <>
+                  <Moon size={12} className="theme-pill-icon" />
+                  <span>Dark</span>
+                </>
+              ) : (
+                <>
+                  <Sun size={12} className="theme-pill-icon" />
+                  <span>Light</span>
+                </>
+              )}
             </button>
-            <button className="download-app-btn" title="Download Desktop App" onClick={() => alert('Limo Desktop v1.0 Installed')}>
+            <button
+              className="download-app-btn"
+              title="Download Desktop App"
+              onClick={() => showToast('Limo Desktop v1.0 is installed and active', 'success')}
+            >
               <ArrowDownToLine size={15} />
             </button>
           </div>
@@ -199,7 +226,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           display: flex;
           flex-direction: column;
           height: 100%;
-          transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+          transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.2s ease, border-color 0.2s ease;
           flex-shrink: 0;
           overflow: hidden;
           z-index: 30;
@@ -219,7 +246,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           align-items: center;
           justify-content: space-between;
           padding: 0 16px;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+          border-bottom: 1px solid var(--border-subtle);
         }
 
         .brand-badge {
@@ -232,19 +259,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
         .brand-logo-icon {
           width: 28px;
           height: 28px;
-          background: #ffffff;
-          color: #141413;
+          background: var(--brand-icon-bg);
+          color: var(--brand-icon-color);
           border-radius: 8px;
           display: flex;
           align-items: center;
           justify-content: center;
-          box-shadow: 0 2px 8px rgba(255, 255, 255, 0.2);
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+          transition: all 0.15s ease;
         }
 
         .brand-title {
           font-size: 16px;
           font-weight: 700;
-          color: #ffffff;
+          color: var(--text-primary);
           letter-spacing: 0.04em;
         }
 
@@ -277,7 +305,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         .sidebar-view-toggle {
           display: flex;
           align-items: center;
-          background: rgba(255, 255, 255, 0.05);
+          background: var(--bg-pill);
           border: 1px solid var(--border-subtle);
           border-radius: var(--radius-pill);
           padding: 3px;
@@ -312,13 +340,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         .sidebar-toggle-btn:hover:not(.active) {
           color: var(--text-primary);
-          background: rgba(255, 255, 255, 0.05);
+          background: var(--bg-sidebar-hover);
         }
 
         .sidebar-toggle-btn.active {
-          color: #ffffff;
-          background: rgba(255, 255, 255, 0.14);
-          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+          color: var(--text-primary);
+          background: var(--bg-sidebar-active);
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+          font-weight: 600;
         }
 
         .sidebar-view-toggle.collapsed .sidebar-toggle-btn {
@@ -329,7 +358,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }
 
         .sidebar-view-toggle.collapsed .sidebar-toggle-btn.active {
-          background: rgba(255, 255, 255, 0.15);
+          background: var(--bg-sidebar-active);
         }
 
         .new-chat-wrapper {
@@ -341,9 +370,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           display: flex;
           align-items: center;
           justify-content: space-between;
-          background: rgba(255, 255, 255, 0.06);
-          border: 1px solid rgba(255, 255, 255, 0.12);
-          color: #ffffff;
+          background: var(--bg-pill);
+          border: 1px solid var(--border-medium);
+          color: var(--text-primary);
           padding: 8px 12px;
           border-radius: var(--radius-md);
           font-size: 13px;
@@ -353,8 +382,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }
 
         .new-chat-btn:hover {
-          background: rgba(255, 255, 255, 0.11);
-          border-color: rgba(255, 255, 255, 0.22);
+          background: var(--bg-pill-hover);
+          border-color: var(--border-focus);
         }
 
         .new-chat-icon-text {
@@ -364,8 +393,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }
 
         .shortcut-badge {
-          background: rgba(255, 255, 255, 0.08);
-          border: 1px solid rgba(255, 255, 255, 0.12);
+          background: var(--bg-pill);
+          border: 1px solid var(--border-subtle);
           border-radius: 4px;
           font-size: 11px;
           padding: 2px 6px;
@@ -412,8 +441,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         .nav-item.active {
           background: var(--bg-sidebar-active);
-          color: #ffffff;
-          font-weight: 550;
+          color: var(--text-primary);
+          font-weight: 600;
         }
 
         .nav-icon {
@@ -424,7 +453,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         .nav-item:hover .nav-icon,
         .nav-item.active .nav-icon {
-          color: #ffffff;
+          color: var(--text-primary);
         }
 
         .nav-label {
@@ -479,7 +508,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         .chat-history-item.active {
           background: var(--bg-sidebar-active);
-          color: #ffffff;
+          color: var(--text-primary);
+          font-weight: 550;
         }
 
         .chat-item-icon {
@@ -522,7 +552,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         .sidebar-footer {
           height: 60px;
-          border-top: 1px solid rgba(255, 255, 255, 0.05);
+          border-top: 1px solid var(--border-subtle);
           display: flex;
           align-items: center;
           justify-content: space-between;
@@ -541,14 +571,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
           width: 32px;
           height: 32px;
           border-radius: 50%;
-          background: linear-gradient(135deg, #475569, #1e293b);
-          border: 1px solid rgba(255, 255, 255, 0.15);
+          background: var(--avatar-bg);
+          border: 1px solid var(--avatar-border);
           display: flex;
           align-items: center;
           justify-content: center;
           font-size: 13px;
           font-weight: 600;
-          color: #ffffff;
+          color: var(--avatar-color);
+          transition: all 0.15s ease;
         }
 
         .user-name {
@@ -563,20 +594,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
           gap: 8px;
         }
 
-        .mini-upgrade-btn {
-          background: rgba(255, 255, 255, 0.08);
-          border: 1px solid rgba(255, 255, 255, 0.14);
-          color: var(--text-primary);
+        .theme-toggle-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          background: var(--bg-pill);
+          border: 1px solid var(--border-medium);
+          color: var(--text-secondary);
           font-size: 11px;
           font-weight: 600;
           padding: 4px 9px;
-          border-radius: 9999px;
+          border-radius: var(--radius-pill);
           cursor: pointer;
           transition: all 0.15s ease;
+          user-select: none;
         }
 
-        .mini-upgrade-btn:hover {
-          background: rgba(255, 255, 255, 0.16);
+        .theme-toggle-pill:hover {
+          background: var(--bg-pill-hover);
+          color: var(--text-primary);
+          border-color: var(--border-focus);
+        }
+
+        .theme-pill-icon {
+          flex-shrink: 0;
+          color: var(--text-muted);
+          transition: color 0.15s ease;
+        }
+
+        .theme-toggle-pill:hover .theme-pill-icon {
+          color: var(--text-primary);
         }
 
         .download-app-btn {
@@ -589,10 +636,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           justify-content: center;
           padding: 5px;
           border-radius: var(--radius-sm);
+          transition: all 0.12s ease;
         }
 
         .download-app-btn:hover {
           color: var(--text-primary);
+          background: var(--bg-sidebar-hover);
         }
       `}</style>
     </aside>

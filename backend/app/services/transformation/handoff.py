@@ -592,6 +592,218 @@ class JobArtifactHandoffService:
         )
         return artifact
 
+    def handoff_image_artifact(
+        self,
+        job_id: Optional[str],
+        deliverable_id: str,
+        prismo_result: Dict[str, Any],
+        title: Optional[str] = None,
+        canonical_id: Optional[str] = None,
+        canonical_hash: Optional[str] = None,
+        project_id: Optional[str] = None,
+        allowed_workspace_root: Optional[Path] = None,
+    ) -> Artifact:
+        """Ingest a physical PNG/JPEG artifact from Prismo runner into Limo sandboxed storage and register it.
+
+        Strict Phase D8.8 Compliance:
+        1. Validates output file path resolves strictly inside allowed_workspace_root (path containment).
+        2. Validates output file exists, is non-empty, and bounded (1KB to 50MB).
+        3. Validates binary image signatures (PNG magic bytes: \\x89PNG\\r\\n\\x1a\\n or JPEG SOI: \\xff\\xd8\\xff).
+        4. Validates PNG IHDR chunk dimensions (width x height).
+        5. Computes SHA-256 directly from file bytes.
+        6. Idempotency check matching existing artifacts for this job.
+        7. Saves to sandboxed storage: data/artifacts/art_<id>/final.png.
+        8. Links thumbnail_storage_ref to artifact.storage_ref.
+        9. Registers Artifact entity with ArtifactType.INFOGRAPHIC.
+        10. Updates job artifact_ids if job exists and emits TransformationEventType.ARTIFACT_CREATED.
+        """
+        import struct
+
+        export_info = prismo_result.get("export") or {}
+        output_path_str = export_info.get("filePath") or ""
+        if not output_path_str:
+            raise StorageError("Missing export filePath in Prismo result")
+
+        output_path = Path(output_path_str).resolve()
+
+        # 1. Output Path Containment Security
+        if allowed_workspace_root is not None:
+            root = allowed_workspace_root.resolve()
+            try:
+                is_contained = output_path.is_relative_to(root)
+            except AttributeError:
+                is_contained = os.path.commonpath([str(root), str(output_path)]) == str(root)
+            if not is_contained:
+                raise StorageError(
+                    f"Security violation: Runner output path '{output_path}' escapes allowed workspace root '{root}'"
+                )
+
+        if not output_path.is_file() or output_path.stat().st_size == 0:
+            raise StorageError(f"Prismo output file does not exist or is empty: '{output_path}'")
+
+        file_bytes = output_path.read_bytes()
+        size_bytes = len(file_bytes)
+
+        # 2. Size bounds check (1 KB <= size <= 50 MB)
+        if size_bytes < 1024 or size_bytes > 50 * 1024 * 1024:
+            raise StorageError(f"Image size {size_bytes} bytes is out of valid bounds (1KB - 50MB)")
+
+        # 3. Binary Magic Byte Validation
+        is_png = file_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+        is_jpeg = file_bytes.startswith(b"\xff\xd8\xff")
+        if not is_png and not is_jpeg:
+            raise StorageError("Output file failed binary image signature validation (not valid PNG/JPEG magic bytes)")
+
+        # 4. PNG IHDR Chunk Dimension Extraction
+        parsed_width = export_info.get("width", 1080)
+        parsed_height = export_info.get("height", 1440)
+        if is_png and len(file_bytes) >= 24:
+            try:
+                ihdr_w, ihdr_h = struct.unpack(">II", file_bytes[16:24])
+                if ihdr_w > 0 and ihdr_h > 0:
+                    parsed_width = ihdr_w
+                    parsed_height = ihdr_h
+            except Exception as ex:
+                logger.warning("Could not parse IHDR dimensions from PNG: %s", ex)
+
+        # 4b. Structural Decode Validation (full image structure, not just header)
+        try:
+            from PIL import Image
+            import io
+
+            img = Image.open(io.BytesIO(file_bytes))
+            img.verify()  # Verify structure without full pixel decode
+            # Re-open to get actual dimensions (verify() invalidates the object)
+            img = Image.open(io.BytesIO(file_bytes))
+            decoded_w, decoded_h = img.size
+            if decoded_w != parsed_width or decoded_h != parsed_height:
+                logger.warning(
+                    "PIL dimensions (%dx%d) differ from IHDR (%dx%d), using PIL values",
+                    decoded_w,
+                    decoded_h,
+                    parsed_width,
+                    parsed_height,
+                )
+                parsed_width, parsed_height = decoded_w, decoded_h
+        except ImportError:
+            logger.warning("Pillow not available; skipping structural decode validation")
+        except Exception as decode_err:
+            raise StorageError(
+                f"Image structural decode validation failed: {decode_err}. "
+                "The file may be truncated or corrupted."
+            )
+
+        # 5. Cryptographic Checksum
+        content_hash = self.storage.compute_sha256(file_bytes)
+
+        job = None
+        if job_id:
+            try:
+                job = self.job_svc.get_job(job_id)
+            except Exception:
+                job = None
+
+        # 6. Idempotency check: reuse artifact if already registered for this job with identical hash
+        if job:
+            existing_artifacts = self.art_svc.list_artifacts(job_id=job.id)
+            for existing in existing_artifacts:
+                if existing.content_hash == content_hash:
+                    logger.info(
+                        "Image artifact already ingested for job '%s' with hash '%s' (artifact_id: %s)",
+                        job.id,
+                        content_hash[:8],
+                        existing.id,
+                    )
+                    return existing
+
+        # 7. Sandboxed Storage Ingestion
+        art_id = generate_artifact_id()
+        file_ext = ".jpg" if is_jpeg else ".png"
+        filename = f"final{file_ext}"
+
+        storage_ref, stored_size, _ = self.storage.save_artifact_file(
+            artifact_id=art_id,
+            filename=filename,
+            content=file_bytes,
+        )
+
+        ratio_val = prismo_result.get("ratio") or "3:4"
+        artifact_title = title or f"Poster_{art_id[:8]}"
+        res_str = f"{parsed_width}x{parsed_height}"
+
+        metadata = {
+            "deliverable_id": deliverable_id,
+            "engine": "prismo",
+            "prismo_project_id": prismo_result.get("projectId"),
+            "prismo_run_id": prismo_result.get("runId"),
+            "aspect_ratio": ratio_val,
+            "width": parsed_width,
+            "height": parsed_height,
+            "thumbnail_storage_ref": storage_ref,
+            "diagnostics": prismo_result.get("diagnostics", {}),
+        }
+        if canonical_id:
+            metadata["canonical_id"] = canonical_id
+        if canonical_hash:
+            metadata["canonical_hash"] = canonical_hash
+
+        resolved_project_id = project_id or (job.project_id if job else None)
+        resolved_job_id = job.id if job else None
+
+        # 8. Register in SQLite via ArtifactService
+        artifact = self.art_svc.register_artifact(
+            title=artifact_title,
+            artifact_type=ArtifactType.INFOGRAPHIC,
+            file_format=file_ext,
+            storage_ref=storage_ref,
+            project_id=resolved_project_id,
+            job_id=resolved_job_id,
+            description=f"Generated {ratio_val} graphic poster deliverable via Prismo engine",
+            stats=f"{res_str} • {ratio_val} Poster",
+            metadata=metadata,
+            artifact_id=art_id,
+        )
+
+        # 9. Update Job and Emit Event
+        if job:
+            art_ids = list(job.artifact_ids)
+            if artifact.id not in art_ids:
+                art_ids.append(artifact.id)
+                self.job_svc.update_progress(
+                    job_id=job.id,
+                    state=job.state,
+                    progress=job.progress,
+                    current_stage=job.current_stage or "Poster generated via Prismo",
+                    artifact_ids=art_ids,
+                )
+
+            self.event_broker.emit(
+                job_id=job.id,
+                event_type=TransformationEventType.ARTIFACT_CREATED,
+                payload={
+                    "artifact_id": artifact.id,
+                    "job_id": job.id,
+                    "deliverable_id": deliverable_id,
+                    "title": artifact.title,
+                    "file_format": artifact.file_format,
+                    "size_bytes": artifact.size_bytes,
+                    "content_hash": artifact.content_hash,
+                    "artifact_type": artifact.artifact_type.value,
+                    "aspect_ratio": ratio_val,
+                    "resolution": res_str,
+                },
+            )
+
+        logger.info(
+            "Successfully ingested and handed off Prismo poster artifact '%s' for job '%s' (bytes: %d, sha256: %s, res: %s)",
+            artifact.id,
+            resolved_job_id,
+            size_bytes,
+            content_hash[:8],
+            res_str,
+        )
+        return artifact
+
 
 def _extract_video_thumbnail(output_path: Path, duration: float = 3.0) -> Optional[bytes]:
     """Resilient multi-tier poster frame extraction via ffmpeg:

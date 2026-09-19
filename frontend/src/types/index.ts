@@ -16,12 +16,23 @@ export type FeatureMode =
 
 export type ModelSpeed = 'Instant' | 'High';
 
+export type FileCategory = 
+  | 'presentation' 
+  | 'pdf' 
+  | 'spreadsheet' 
+  | 'document' 
+  | 'image' 
+  | 'code' 
+  | 'file';
+
 export interface AttachmentFile {
   id: string;
   name: string;
   size: number;
   type: string;
   url?: string;
+  previewUrl?: string;
+  fileCategory?: FileCategory;
   sourceId?: string;
   uploadStatus?: 'uploading' | 'done' | 'error';
   error?: string;
@@ -33,6 +44,7 @@ export type ArtifactType =
   | 'sheet' 
   | 'video' 
   | 'audio'
+  | 'infographic'
   | 'website'
   | 'code';
 

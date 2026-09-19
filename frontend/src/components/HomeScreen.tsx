@@ -84,7 +84,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           font-size: 52px;
           font-weight: 800;
           letter-spacing: 0.14em;
-          color: #ffffff;
+          color: var(--text-primary);
           margin-bottom: 8px;
           text-transform: uppercase;
           user-select: none;

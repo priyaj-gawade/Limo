@@ -1,16 +1,46 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { HomeScreen } from './components/HomeScreen';
 import { ChatView } from './components/ChatView';
+import { ConfirmModal } from './components/ConfirmModal';
+import { useToast } from './context/ToastContext';
 import { FeatureMode, ModelSpeed, AttachmentFile, ChatSession, Artifact, ChatMessage } from './types';
+import { getFileCategory } from './utils/attachmentUtils';
 
 // UI Preference Storage Keys
 const SIDEBAR_PREF_KEY = 'limo_ui_sidebar_collapsed';
 const ACTIVE_SESSION_KEY = 'limo_active_session_id';
+const THEME_STORAGE_KEY = 'limo_theme';
 
 export const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<'limo' | 'genoffice'>('limo');
+
+  // Theme state with localStorage persistence and system theme fallback
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      const saved = localStorage.getItem(THEME_STORAGE_KEY);
+      if (saved === 'light' || saved === 'dark') return saved;
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+        return 'light';
+      }
+    } catch {
+      // fallback
+    }
+    return 'dark';
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // ignore
+    }
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
   
   // UI Preference only: sidebar collapsed state
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
@@ -33,16 +63,8 @@ export const App: React.FC = () => {
     }
   });
   const [isGenerating, setIsGenerating] = useState(false);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  const showToast = (msg: string) => {
-    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
-    setToastMessage(msg);
-    toastTimeoutRef.current = setTimeout(() => {
-      setToastMessage(null);
-    }, 3000);
-  };
+  const { showToast } = useToast();
+  const [sessionToDelete, setSessionToDelete] = useState<{ id: string; title: string } | null>(null);
 
   // Save UI layout preference
   const toggleSidebar = () => {
@@ -63,27 +85,52 @@ export const App: React.FC = () => {
       const res = await fetch(`/api/v1/chats/${sessionId}/messages`);
       if (res.ok) {
         const data: any[] = await res.json();
-        const mapped: ChatMessage[] = data.map((m) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          mode: m.mode || 'none',
-          artifactIds: m.artifact_ids || [],
-          artifacts: (m.artifacts || []).map((a: any) => ({
-            id: a.id,
-            title: a.title,
-            type: a.artifact_type,
-            description: a.description || '',
-            fileFormat: a.file_format,
-            sizeBytes: a.size_bytes,
-            stats: a.stats,
-            metadata: a.metadata,
-            thumbnailUrl: `/api/v1/artifacts/${a.id}/thumbnail`,
-            createdAt: a.created_at,
-          })),
-          executionSummary: m.execution_summary,
-          createdAt: m.created_at || new Date().toISOString(),
-        }));
+        const mapped: ChatMessage[] = data.map((m) => {
+          const rawAttachments: any[] = m.attachments || [];
+          const attachments: AttachmentFile[] = rawAttachments.map((att: any) => {
+            const mimeType = att.mime_type || att.type || '';
+            const category = getFileCategory(att.name, mimeType);
+            const isImg = category === 'image';
+            const sourceId = att.source_id || att.sourceId;
+            const previewUrl =
+              att.previewUrl ||
+              (isImg && sourceId ? `/api/v1/sources/${sourceId}/download` : undefined);
+
+            return {
+              id: att.id || `att-${Math.random().toString(36).substring(2, 7)}`,
+              name: att.name,
+              size: att.size_bytes || att.size || 0,
+              type: mimeType || 'application/octet-stream',
+              sourceId,
+              fileCategory: category,
+              previewUrl,
+              uploadStatus: 'done' as const,
+            };
+          });
+
+          return {
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            mode: m.mode || 'none',
+            attachments,
+            artifactIds: m.artifact_ids || [],
+            artifacts: (m.artifacts || []).map((a: any) => ({
+              id: a.id,
+              title: a.title,
+              type: a.artifact_type,
+              description: a.description || '',
+              fileFormat: a.file_format,
+              sizeBytes: a.size_bytes,
+              stats: a.stats,
+              metadata: a.metadata,
+              thumbnailUrl: `/api/v1/artifacts/${a.id}/thumbnail`,
+              createdAt: a.created_at,
+            })),
+            executionSummary: m.execution_summary,
+            createdAt: m.created_at || new Date().toISOString(),
+          };
+        });
         setSessions((prev) =>
           prev.map((s) => (s.id === sessionId ? { ...s, messages: mapped } : s))
         );
@@ -170,12 +217,22 @@ export const App: React.FC = () => {
     fetchMessages(id);
   };
 
-  const handleDeleteSession = async (id: string, e: React.MouseEvent) => {
+  const handleRequestDeleteSession = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    const s = sessions.find((item) => item.id === id);
+    setSessionToDelete({ id, title: s ? s.title : 'this chat' });
+  };
+
+  const handleConfirmDeleteSession = async () => {
+    if (!sessionToDelete) return;
+    const { id } = sessionToDelete;
+    setSessionToDelete(null);
     try {
       await fetch(`/api/v1/chats/${id}`, { method: 'DELETE' });
+      showToast('Chat deleted', 'info');
     } catch (err) {
       console.error('Failed to delete chat session:', err);
+      showToast('Failed to delete chat session', 'error');
     }
     setSessions((prev) => prev.filter((s) => s.id !== id));
     if (activeSessionId === id) {
@@ -355,7 +412,9 @@ export const App: React.FC = () => {
           activeSessionId={activeSessionId}
           onSelectSession={handleSelectSession}
           onNewChat={handleNewChat}
-          onDeleteSession={handleDeleteSession}
+          onDeleteSession={handleRequestDeleteSession}
+          theme={theme}
+          onToggleTheme={toggleTheme}
         />
 
         {/* Main Conversational Stage (Zero persistent canvas, strictly chat-first) */}
@@ -380,15 +439,17 @@ export const App: React.FC = () => {
         </main>
       </div>
 
-      {/* Non-intrusive action feedback toast */}
-      {toastMessage && (
-        <div className="limo-toast-container animate-fade-in">
-          <div className="limo-toast-pill">
-            <CheckCircle2 size={15} className="toast-icon-check" />
-            <span>{toastMessage}</span>
-          </div>
-        </div>
-      )}
+      {/* Accessible in-app confirmation modal for destructive session deletion */}
+      <ConfirmModal
+        isOpen={!!sessionToDelete}
+        title="Delete Chat"
+        message={`Are you sure you want to delete "${sessionToDelete?.title}"? This conversation cannot be restored.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        isDestructive={true}
+        onConfirm={handleConfirmDeleteSession}
+        onCancel={() => setSessionToDelete(null)}
+      />
 
       <style>{`
         .limo-app-root {
@@ -428,9 +489,9 @@ export const App: React.FC = () => {
         }
 
         .limo-toast-pill {
-          background: #242423;
-          border: 1px solid rgba(255, 255, 255, 0.16);
-          color: #ffffff;
+          background: var(--bg-toast);
+          border: 1px solid var(--border-medium);
+          color: var(--text-inverse);
           padding: 10px 18px;
           border-radius: var(--radius-pill);
           font-size: 13px;
@@ -438,7 +499,7 @@ export const App: React.FC = () => {
           display: flex;
           align-items: center;
           gap: 10px;
-          box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+          box-shadow: var(--shadow-toast);
         }
 
         .toast-icon-check {

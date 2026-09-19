@@ -17,6 +17,7 @@ import re
 from typing import List, Optional, Tuple, Union
 from pydantic import BaseModel, Field
 
+from ...exceptions import BadRequestError
 from ...models.enums import FeatureMode, OutputFormat
 
 logger = logging.getLogger("limo.agent.intent")
@@ -73,6 +74,7 @@ class TargetFormat(StrEnum):
     MARKDOWN = "markdown"
     VIDEO = "video"
     AUDIO = "audio"
+    INFOGRAPHIC = "infographic"
 
 
 class ResolutionResult(BaseModel):
@@ -80,6 +82,7 @@ class ResolutionResult(BaseModel):
     response_type: ResponseType = Field(description="Authoritative response pathway")
     user_goal: UserGoal = Field(description="Detected underlying user goal")
     target_format: Optional[TargetFormat] = Field(default=None, description="Resolved output deliverable format")
+    resolved_ratio: Optional[str] = Field(default=None, description="Resolved aspect ratio for poster/infographic deliverable")
     confidence: ConfidenceLevel = Field(description="Classification confidence level")
     reason: str = Field(description="Deterministic rationale for classification")
     source_reference: Optional[str] = Field(default=None, description="Extracted input source phrase for transforms")
@@ -154,6 +157,11 @@ class IntentResolver:
         directive, body = self._extract_directive_and_body(prompt)
         d_lower = directive.lower().strip()
 
+        # Extract explicit aspect ratio token if requested (e.g. "3:4", "9:16", "16:9", "1:1", "4:3")
+        ratio_match = re.search(r"\b(\d+:\d+)\b", prompt.lower())
+        explicit_ratio_requested = ratio_match.group(1).strip() if ratio_match else None
+        detected_ratio = explicit_ratio_requested or "3:4"
+
         # Normalize mode string
         mode_str = "none"
         if active_mode:
@@ -175,7 +183,7 @@ class IntentResolver:
         # e.g. "Don't create a PDF, just summarize it"
         # -------------------------------------------------------------------
         if re.search(
-            r"\b(don'?t\s+create|do\s+not\s+create|don'?t\s+make|do\s+not\s+make|no\s+(?:pdf|file|doc|document|slides?|spreadsheet|video)|without\s+creating|don'?t\s+generate|do\s+not\s+generate)\b",
+            r"\b(don'?t\s+create|do\s+not\s+create|don'?t\s+make|do\s+not\s+make|no\s+(?:pdf|file|doc|document|slides?|spreadsheet|video|infographic|poster|image)|without\s+creating|don'?t\s+generate|do\s+not\s+generate)\b",
             d_lower,
         ):
             goal = UserGoal.SUMMARIZE if "summar" in d_lower else UserGoal.QUESTION_ANSWER
@@ -214,7 +222,7 @@ class IntentResolver:
                 r"^(what|why|who|where|which|when)\s+(?:is|are|was|were|do|does|did|would|could|can|to|did\s+they|should|will)\b",
                 d_lower,
             )
-            or re.match(r"^(tell\s+me\s+about|can\s+you\s+tell\s+me|explain\s+why|can\s+you\s+explain\s+why)\b", d_lower)
+            or re.match(r"^(tell\s+me\s+about|can\s+you\s+tell\s+me|explain\s+(?:what|why|how)|can\s+you\s+explain\s+(?:what|why|how))\b", d_lower)
         )
         # Exclude polite generation commands like "Can you create a PDF...", "Could you make a document..."
         is_polite_generation_command = bool(
@@ -239,7 +247,7 @@ class IntentResolver:
         # -------------------------------------------------------------------
         has_output_transform_target = bool(
             re.search(
-                r"\b(?:in|into|as|using|with|to)\s+(?:markdown|\.md|audio|speech|voice|narration|slides?|presentation|spreadsheets?|sheets?|xlsx|pdf|documents?|docs?|docx)\b",
+                r"\b(?:in|into|as|using|with|to)\s+(?:markdown|\.md|audio|speech|voice|narration|slides?|presentation|spreadsheets?|sheets?|xlsx|pdf|documents?|docs?|docx|infographics?|posters?|images?)\b",
                 d_lower,
             )
         )
@@ -350,6 +358,20 @@ class IntentResolver:
                     reason="Explicit conversion to Audio/TTS deliverable",
                     source_reference=src_phrase,
                 )
+            elif any(w in target_str for w in ["infographic", "poster", "image", "visual", "graphic"]):
+                if explicit_ratio_requested and explicit_ratio_requested not in ("3:4", "9:16", "16:9", "1:1", "4:3"):
+                    raise BadRequestError(
+                        f"Unsupported aspect ratio '{explicit_ratio_requested}'. Prismo supports: 3:4, 9:16, 16:9, 1:1, and 4:3."
+                    )
+                return ResolutionResult(
+                    response_type=ResponseType.TRANSFORM_TO_ARTIFACT,
+                    user_goal=UserGoal.CONVERT_DELIVERABLE,
+                    target_format=TargetFormat.INFOGRAPHIC,
+                    resolved_ratio=detected_ratio,
+                    confidence=ConfidenceLevel.HIGH,
+                    reason="Explicit conversion to Infographic/Poster deliverable",
+                    source_reference=src_phrase,
+                )
             elif any(w in target_str for w in ["notes", "something", "nicely"]):
                 return ResolutionResult(
                     response_type=ResponseType.AMBIGUOUS,
@@ -385,13 +407,16 @@ class IntentResolver:
         # Active UI mode explicitly sets the deliverable format container.
         # Format explicitly requested in text (e.g. Markdown, PDF, Slides) overrides mode.
         # -------------------------------------------------------------------
-        if mode_str in ("docs", "slides", "sheets", "video", "audio"):
+        if mode_str in ("docs", "slides", "sheets", "video", "audio", "infographic", "poster", "image"):
             mode_to_fmt = {
                 "docs": TargetFormat.DOCUMENT,
                 "slides": TargetFormat.PRESENTATION,
                 "sheets": TargetFormat.SPREADSHEET,
                 "video": TargetFormat.VIDEO,
                 "audio": TargetFormat.AUDIO,
+                "infographic": TargetFormat.INFOGRAPHIC,
+                "poster": TargetFormat.INFOGRAPHIC,
+                "image": TargetFormat.INFOGRAPHIC,
             }
             override_fmt = mode_to_fmt[mode_str]
 
@@ -410,13 +435,21 @@ class IntentResolver:
                 target_f = TargetFormat.DOCUMENT
             elif re.search(r"\b(audio|speech|narration|voiceover|read\s+(?:this\s+)?aloud)\b", d_lower):
                 target_f = TargetFormat.AUDIO
+            elif re.search(r"\b(infographics?|posters?|images?|visual\s+posters?)\b", d_lower):
+                target_f = TargetFormat.INFOGRAPHIC
             else:
                 target_f = override_fmt
+
+            if target_f == TargetFormat.INFOGRAPHIC and explicit_ratio_requested and explicit_ratio_requested not in ("3:4", "9:16", "16:9", "1:1", "4:3"):
+                raise BadRequestError(
+                    f"Unsupported aspect ratio '{explicit_ratio_requested}'. Prismo supports: 3:4, 9:16, 16:9, 1:1, and 4:3."
+                )
 
             return ResolutionResult(
                 response_type=ResponseType.GENERATE_ARTIFACT,
                 user_goal=UserGoal.CREATE_DELIVERABLE,
                 target_format=target_f,
+                resolved_ratio=detected_ratio if target_f == TargetFormat.INFOGRAPHIC else None,
                 confidence=ConfidenceLevel.HIGH,
                 reason=f"Explicit feature mode '{mode_str}' acts as format authority (resolved format: {target_f.value})",
             )
@@ -451,7 +484,13 @@ class IntentResolver:
         has_explicit_md_file = bool(re.search(r"\b(markdown\s+(?:document|doc|report|file)|md\s+file|downloadable\s+markdown)\b", d_unquoted))
         has_explicit_video = bool(re.search(r"\b(videos?|explainer\s+video|video\s+clip|short\s+video)\b", d_unquoted))
         has_explicit_audio = bool(re.search(r"\b(audio|speech\s+file|narration|audio\s+file|mp3|voiceover|read\s+(?:this\s+)?aloud)\b", d_unquoted))
-        has_format_keyword = any([has_explicit_doc, has_explicit_slides, has_explicit_sheet, has_explicit_pdf, has_explicit_md_file, has_explicit_video, has_explicit_audio])
+        has_explicit_infographic = bool(re.search(r"\b(infographics?|posters?|visual\s+posters?)\b", d_unquoted))
+        has_explicit_image = bool(re.search(r"\b(images?|flyers?)\b", d_unquoted))
+        has_format_keyword = any([
+            has_explicit_doc, has_explicit_slides, has_explicit_sheet,
+            has_explicit_pdf, has_explicit_md_file, has_explicit_video,
+            has_explicit_audio, has_explicit_infographic, has_explicit_image,
+        ])
 
         # Special case: "Summarize this in Markdown" -> Ambiguous whether chat formatting or .md file
         if is_pure_conversational_goal and re.search(r"\bin\s+markdown\b", d_lower) and not has_explicit_md_file:
@@ -521,6 +560,8 @@ class IntentResolver:
             detected_formats.append(TargetFormat.VIDEO)
         if has_explicit_audio or re.search(r"\b(read\s+(?:this\s+)?aloud|synthesize\s+(?:speech|voice|audio))\b", d_unquoted):
             detected_formats.append(TargetFormat.AUDIO)
+        if has_explicit_infographic or has_explicit_image or ("infographic about" in d_unquoted or "poster for" in d_unquoted or "poster about" in d_unquoted):
+            detected_formats.append(TargetFormat.INFOGRAPHIC)
 
 
         # Ambiguous disjunctive formats: "document or slides", "maybe a spreadsheet or a doc"
@@ -561,26 +602,46 @@ class IntentResolver:
                     TargetFormat.PRESENTATION,
                     TargetFormat.SPREADSHEET,
                     TargetFormat.PDF,
+                    TargetFormat.INFOGRAPHIC,
                     TargetFormat.MARKDOWN,
                 ],
                 clarification_prompt=(
                     "I'd love to help! What kind of deliverable would you like to create? "
-                    "(For example: a document, presentation, spreadsheet, PDF memo, or Markdown file?)"
+                    "(For example: a document, presentation, spreadsheet, PDF memo, infographic, or Markdown file?)"
                 ),
             )
 
         # Unambiguous Deliverable Generation
         if len(detected_formats) == 1 and (has_creation_command or has_format_keyword):
             fmt = detected_formats[0]
+            if fmt == TargetFormat.INFOGRAPHIC and explicit_ratio_requested and explicit_ratio_requested not in ("3:4", "9:16", "16:9", "1:1", "4:3"):
+                raise BadRequestError(
+                    f"Unsupported aspect ratio '{explicit_ratio_requested}'. Prismo supports: 3:4, 9:16, 16:9, 1:1, and 4:3."
+                )
             return ResolutionResult(
                 response_type=ResponseType.GENERATE_ARTIFACT,
                 user_goal=UserGoal.CREATE_DELIVERABLE,
                 target_format=fmt,
+                resolved_ratio=detected_ratio if fmt == TargetFormat.INFOGRAPHIC else None,
                 confidence=ConfidenceLevel.HIGH,
                 reason=f"Explicit creation verb + unambiguous {fmt.value} deliverable target",
             )
 
         # Compound phrases (e.g. 'Create a Markdown document with a table')
+        if TargetFormat.INFOGRAPHIC in detected_formats:
+            if explicit_ratio_requested and explicit_ratio_requested not in ("3:4", "9:16", "16:9", "1:1", "4:3"):
+                raise BadRequestError(
+                    f"Unsupported aspect ratio '{explicit_ratio_requested}'. Prismo supports: 3:4, 9:16, 16:9, 1:1, and 4:3."
+                )
+            return ResolutionResult(
+                response_type=ResponseType.GENERATE_ARTIFACT,
+                user_goal=UserGoal.CREATE_DELIVERABLE,
+                target_format=TargetFormat.INFOGRAPHIC,
+                resolved_ratio=detected_ratio,
+                confidence=ConfidenceLevel.HIGH,
+                reason="Infographic compound deliverable target",
+            )
+
         if TargetFormat.MARKDOWN in detected_formats:
             return ResolutionResult(
                 response_type=ResponseType.GENERATE_ARTIFACT,

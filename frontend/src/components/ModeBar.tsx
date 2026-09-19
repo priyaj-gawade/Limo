@@ -66,8 +66,8 @@ export const ModeBar: React.FC<ModeBarProps> = ({ activeMode, onSelectMode }) =>
           display: flex;
           align-items: center;
           gap: 7px;
-          background: rgba(255, 255, 255, 0.04);
-          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: var(--bg-pill);
+          border: 1px solid var(--border-medium);
           color: var(--text-secondary);
           padding: 7px 15px;
           border-radius: var(--radius-pill);
@@ -79,17 +79,18 @@ export const ModeBar: React.FC<ModeBarProps> = ({ activeMode, onSelectMode }) =>
         }
 
         .mode-feature-pill:hover {
-          background: rgba(255, 255, 255, 0.08);
-          border-color: rgba(255, 255, 255, 0.2);
+          background: var(--bg-pill-hover);
+          border-color: var(--border-focus);
           color: var(--text-primary);
           transform: translateY(-1px);
         }
 
         .mode-feature-pill.active {
-          background: rgba(255, 255, 255, 0.15);
-          border-color: rgba(255, 255, 255, 0.35);
-          color: #ffffff;
-          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+          background: var(--bg-pill-active);
+          border-color: var(--border-active);
+          color: var(--text-primary);
+          box-shadow: var(--shadow-card);
+          font-weight: 600;
         }
 
         .pill-icon {
@@ -101,7 +102,7 @@ export const ModeBar: React.FC<ModeBarProps> = ({ activeMode, onSelectMode }) =>
 
         .mode-feature-pill:hover .pill-icon,
         .mode-feature-pill.active .pill-icon {
-          color: #ffffff;
+          color: var(--text-primary);
         }
 
         .pill-text {

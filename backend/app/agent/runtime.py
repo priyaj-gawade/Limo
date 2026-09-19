@@ -314,6 +314,7 @@ class LimoAgentRuntime:
                     TargetFormat.MARKDOWN: OutputFormat.MARKDOWN,
                     TargetFormat.VIDEO: OutputFormat.VIDEO,
                     TargetFormat.AUDIO: OutputFormat.AUDIO,
+                    TargetFormat.INFOGRAPHIC: OutputFormat.INFOGRAPHIC,
                 }
                 out_fmt = format_mapping.get(resolution.target_format, OutputFormat.DOCUMENT)
 
@@ -326,13 +327,13 @@ class LimoAgentRuntime:
 
                 # Detect if prompt is a generic conversion directive without an explicit title
                 is_generic_directive = bool(re.match(
-                    r"^(put|turn|convert|transform|make|create|generate|write)\s+(this|these|it|the attached|attached file|attachment)?\s*(into|in|to|as|from)?\s*(a\s+)?(one-page\s+|2-slide\s+|small\s+|short\s+|8-second\s+|15-second\s+)?(markdown\s+|md\s+|docs?|documents?|presentations?|slides?|spreadsheets?|sheets?|tables?|pdfs?|videos?|memos?|explainer\s+video)?\s*$",
+                    r"^(put|turn|convert|transform|make|create|generate|write)\s+(this|these|it|the attached|attached file|attachment)?\s*(into|in|to|as|from)?\s*(a\s+)?(one-page\s+|2-slide\s+|small\s+|short\s+|8-second\s+|15-second\s+|\d+:\d+\s+)?(markdown\s+|md\s+|docs?|documents?|presentations?|slides?|spreadsheets?|sheets?|tables?|pdfs?|videos?|memos?|explainer\s+video|infographics?|posters?|images?|flyers?)?\s*$",
                     user_prompt.strip(),
                     flags=re.IGNORECASE,
                 ))
 
                 title_cand = re.sub(
-                    r"^(?:create|generate|write|make|convert|transform|turn|put|read\s+(?:this\s+)?aloud|narrate)\s+(?:a\s+)?(?:one-page\s+|2-slide\s+|small\s+|short\s+|8-second\s+|15-second\s+)?(?:markdown\s+|md\s+|docs?|documents?|slides?|presentations?|spreadsheets?|sheets?|tables?|pdfs?|memos?|videos?|explainer\s+video|audio|speech|narration)?\s*(?:on|about|for|of|into|to|from|:)?\s*(?:this|these|the attached|it)?\s*",
+                    r"^(?:create|generate|write|make|convert|transform|turn|put|read\s+(?:this\s+)?aloud|narrate)\s+(?:a\s+)?(?:one-page\s+|2-slide\s+|small\s+|short\s+|8-second\s+|15-second\s+|\d+:\d+\s+)?(?:markdown\s+|md\s+|docs?|documents?|slides?|presentations?|spreadsheets?|sheets?|tables?|pdfs?|memos?|videos?|explainer\s+video|audio|speech|narration|infographics?|posters?|images?|flyers?|visual\s+posters?)?\s*(?:on|about|for|of|into|to|from|:)?\s*(?:this|these|the attached|it)?\s*",
                     "",
                     user_prompt,
                     flags=re.IGNORECASE,
@@ -340,7 +341,7 @@ class LimoAgentRuntime:
                 title_cand = re.sub(r"\s+with\s+a\s+title.*$", "", title_cand, flags=re.IGNORECASE).strip()
                 title_cand = re.sub(r"[^\w\s-]", "", title_cand).strip().rstrip(".!?")
 
-                if is_generic_directive or not title_cand or len(title_cand) < 2 or title_cand.lower() in ("this", "these", "it", "the attached", "document", "slides", "presentation", "sheet", "spreadsheet", "video", "audio"):
+                if is_generic_directive or not title_cand or len(title_cand) < 2 or title_cand.lower() in ("this", "these", "it", "the attached", "document", "slides", "presentation", "sheet", "spreadsheet", "video", "audio", "infographic", "poster", "image"):
                     if grounded_canonical_title:
                         title_cand = "_".join(w.capitalize() for w in grounded_canonical_title.split())[:45]
                     else:
@@ -700,6 +701,105 @@ class LimoAgentRuntime:
                         session_id=session_id,
                         content=content,
                         mode=mode or FeatureMode.AUDIO,
+                        artifact_ids=[artifact.id],
+                        execution_summary=summary,
+                    )
+                    return assistant_msg
+
+                # Branch 3e: Infographic / Poster Deliverables (Phase D8.8 Prismo Engine via D6)
+                elif route.engine_type == EngineType.PRISMO_ENGINE or out_fmt == OutputFormat.INFOGRAPHIC or resolution.target_format == TargetFormat.INFOGRAPHIC:
+                    # 1. Authoritative aspect ratio
+                    aspect_ratio = resolution.resolved_ratio or "3:4"
+                    if not resolution.resolved_ratio:
+                        m_ratio = re.search(r"\b(3:4|9:16|16:9|1:1|4:3)\b", user_prompt)
+                        if m_ratio:
+                            aspect_ratio = m_ratio.group(1)
+
+                    # 2. Topic / title cleanup
+                    raw_topic = display_title
+                    clean_topic = re.sub(r"^(?:please\s+)?(?:create|make|generate|produce|build|draft)\s+(?:a|an)?\s*", "", raw_topic, flags=re.IGNORECASE)
+                    clean_topic = re.sub(r"\b(?:\d+:\d+)\s*(?:infographic|poster|image|visual)?\s*(?:about|on|covering|for)?\b", "", clean_topic, flags=re.IGNORECASE)
+                    clean_topic = re.sub(r"^(?:infographic|poster|image|visual)\s+(?:about|on|covering|for)\s*", "", clean_topic, flags=re.IGNORECASE)
+                    clean_topic = re.sub(r"\b(?:infographic|poster|image|visual)\b", "", clean_topic, flags=re.IGNORECASE)
+                    clean_topic = " ".join(clean_topic.split()).strip().title()
+                    if not clean_topic:
+                        clean_topic = "Infographic Poster"
+
+                    logger.info("Executing Prismo infographic generation: raw='%s' -> clean_topic='%s' (ratio=%s)",
+                                display_title, clean_topic, aspect_ratio)
+
+                    # 3. Ground in canonical facts if available
+                    if context.unified_input and context.unified_input.canonical_contents:
+                        canonical = context.unified_input.canonical_contents[0]
+                        clean_topic = canonical.title or clean_topic
+                    else:
+                        article_key_points = []
+                        if "summariz" in user_prompt.lower() or len(user_prompt) > 150:
+                            sentences = [s.strip() for s in re.split(r"[.\n]+", user_prompt) if len(s.strip()) > 20]
+                            substantive = [s for s in sentences if not re.match(r"^(?:create|summarize|make|please|write)\b", s, re.IGNORECASE)]
+                            if substantive:
+                                article_key_points = substantive[:4]
+
+                        facts = [
+                            CanonicalFact(statement=pt, confidence=0.95, evidence_status="verified")
+                            for pt in article_key_points
+                        ] if article_key_points else [
+                            CanonicalFact(
+                                statement=f"{clean_topic} core structural breakdown and visual summary.",
+                                confidence=0.95,
+                                evidence_status="verified",
+                            )
+                        ]
+
+                        canonical = CanonicalContent(
+                            source_ids=["src_chat_prompt"],
+                            title=clean_topic,
+                            context=f"Synthesized infographic poster on {clean_topic}.",
+                            intent=CanonicalIntent(
+                                primary_purpose=f"Provide a visually striking infographic on {clean_topic}.",
+                                target_audiences=["General Audience"],
+                                core_narrative=f"Key insights, visual breakdown, and data highlights of {clean_topic}.",
+                            ),
+                            facts=facts,
+                            content_hash=canonical_hash,
+                        )
+
+                    planned_deliv.title = clean_topic
+                    planned_deliv.options = planned_deliv.options or {}
+                    planned_deliv.options["aspect_ratio"] = aspect_ratio
+                    planned_deliv.options["user_directive"] = user_prompt
+
+                    # 4. Create persistent TransformationJob
+                    job = self.job_svc.create_job(
+                        project_id=project_id,
+                        session_id=session_id,
+                        requested_formats=[OutputFormat.INFOGRAPHIC],
+                        prompt=user_prompt,
+                    )
+
+                    # 5. Dispatch through authoritative D6 EngineRouter
+                    artifact = await asyncio.to_thread(
+                        self.engine_router.dispatch,
+                        route=route,
+                        deliverable=planned_deliv,
+                        canonical=canonical,
+                        config=GenerationConfig(audience="General", tone="professional"),
+                        project_id=project_id,
+                        job_id=job.id,
+                        unified_input=context.unified_input,
+                    )
+
+                    summary = f"Generated {aspect_ratio} infographic poster '{artifact.title}.png' via D6 and Prismo design engine."
+                    content = (
+                        f"I have created your infographic: **{artifact.title}{artifact.file_format}** ({aspect_ratio}).\n\n"
+                        f"The design was composed using Prismo with balanced typography, visual structure, and verified PNG export.\n\n"
+                        f"You can view the deliverable card below and download `{artifact.title}{artifact.file_format}` directly."
+                    )
+
+                    assistant_msg = self.chat_svc.add_assistant_message(
+                        session_id=session_id,
+                        content=content,
+                        mode=mode or FeatureMode.NONE,
                         artifact_ids=[artifact.id],
                         execution_summary=summary,
                     )

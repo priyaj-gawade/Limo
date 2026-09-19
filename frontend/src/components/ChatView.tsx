@@ -17,11 +17,18 @@ import {
   ExternalLink,
   Copy,
   RotateCcw,
-  Volume2
+  Volume2,
+  Image as ImageIcon
 } from 'lucide-react';
 import { Composer } from './Composer';
 import { VideoPlayerCard } from './VideoPlayerCard';
+import { MarkdownMessage } from './MarkdownMessage';
+import { useToast } from '../context/ToastContext';
 import { ChatSession, Artifact, FeatureMode, ModelSpeed, AttachmentFile } from '../types';
+import { getFileCategory, getCategorySubtitle, renderAttachmentBadge } from '../utils/attachmentUtils';
+import { Blobatar } from '@blobatar/react';
+import { happy } from 'blobatar/expression';
+import 'blobatar/motion.css';
 
 interface ChatViewProps {
   session: ChatSession;
@@ -48,7 +55,30 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onDownloadArtifact
 }) => {
   const [expandedThinking, setExpandedThinking] = useState<Record<string, boolean>>({});
+  const [hoveredArtifactId, setHoveredArtifactId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const { showToast } = useToast();
+
+  const handleRegenerate = (msgId: string) => {
+    const msgIndex = session.messages.findIndex((m) => m.id === msgId);
+    let userPrompt = '';
+    let userAttachments: AttachmentFile[] = [];
+    if (msgIndex >= 0) {
+      for (let i = msgIndex - 1; i >= 0; i--) {
+        if (session.messages[i].role === 'user') {
+          userPrompt = session.messages[i].content;
+          userAttachments = session.messages[i].attachments || [];
+          break;
+        }
+      }
+    }
+    if (userPrompt) {
+      showToast('Regenerating response...', 'info');
+      onSend(userPrompt, userAttachments, 'Instant');
+    } else {
+      showToast('No previous user prompt to regenerate', 'info');
+    }
+  };
 
   const toggleThinking = (msgId: string) => {
     setExpandedThinking((prev) => ({
@@ -73,6 +103,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
         return <Video size={18} className="artifact-icon-video" />;
       case 'audio':
         return <Volume2 size={18} className="artifact-icon-audio" />;
+      case 'infographic':
+        return <ImageIcon size={18} className="artifact-icon-image" />;
       case 'website':
         return <Globe size={18} className="artifact-icon-website" />;
       case 'code':
@@ -106,7 +138,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
           )}
         </div>
         <div className="session-header-actions">
-          <button className="header-action-btn" onClick={() => alert('Chat link copied')}>
+          <button
+            className="header-action-btn"
+            onClick={() => {
+              navigator.clipboard.writeText(window.location.href);
+              showToast('Chat link copied to clipboard', 'success');
+            }}
+          >
             <Share2 size={14} />
             <span>Share</span>
           </button>
@@ -120,41 +158,101 @@ export const ChatView: React.FC<ChatViewProps> = ({
             const isUser = message.role === 'user';
             const isThinkingOpen = expandedThinking[message.id] ?? false;
 
-            return (
-              <div key={message.id} className={`message-row ${isUser ? 'user-turn' : 'assistant-turn'}`}>
-                {/* Turn Header / Identity */}
-                <div className="message-header">
-                  <div className="author-badge">
-                    {isUser ? (
-                      <div className="avatar user-avatar">P</div>
-                    ) : (
-                      <div className="avatar limo-avatar">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                          <path d="M4 4v16h16" />
-                          <polyline points="4 12 12 12 20 4" />
-                        </svg>
+            if (isUser) {
+              const attachments = message.attachments || [];
+              const images = attachments.filter((a) => {
+                const cat = a.fileCategory || getFileCategory(a.name, a.type);
+                return cat === 'image' && (a.previewUrl || a.url);
+              });
+              const documents = attachments.filter((a) => {
+                const cat = a.fileCategory || getFileCategory(a.name, a.type);
+                return cat !== 'image' || (!a.previewUrl && !a.url);
+              });
+
+              const isFourImagesOnly = images.length === 4 && documents.length === 0;
+
+              return (
+                <div key={message.id} className="message-row user-turn">
+                  <div className="user-bubble-wrap">
+                    {attachments.length > 0 && (
+                      <div className="user-attachments-scroll-window slim-scrollbar">
+                        {isFourImagesOnly ? (
+                          <div className="user-images-2x2-grid">
+                            {images.map((img) => (
+                              <div key={img.id} className="grid-2x2-item">
+                                <img
+                                  src={img.previewUrl || img.url}
+                                  alt={img.name}
+                                  className="grid-img-el"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <>
+                            {images.length > 0 && (
+                              <div className={`user-images-flex-grid count-${Math.min(images.length, 4)}`}>
+                                {images.map((img) => (
+                                  <div key={img.id} className="user-image-bubble-card">
+                                    <img
+                                      src={img.previewUrl || img.url}
+                                      alt={img.name}
+                                      className="grid-img-el"
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {documents.map((doc) => {
+                              const category = doc.fileCategory || getFileCategory(doc.name, doc.type);
+                              return (
+                                <div key={doc.id} className="chatgpt-file-card user-chat-file-card">
+                                  <div className="file-card-badge-wrap">
+                                    {renderAttachmentBadge(category)}
+                                  </div>
+                                  <div className="file-card-meta">
+                                    <div className="file-card-title" title={doc.name}>{doc.name}</div>
+                                    <div className="file-card-subtitle">
+                                      {getCategorySubtitle(category, doc.name)}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </>
+                        )}
                       </div>
                     )}
-                    <span className="author-name">{isUser ? 'You' : 'Limo'}</span>
+
+                    {message.content && (
+                      <div className="user-message-bubble">
+                        {message.content}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <div key={message.id} className="message-row assistant-turn">
+                <div className="limo-mascot-col">
+                  <div className="limo-mascot-wrap" title="Limo">
+                    <Blobatar
+                      name="Limo"
+                      traits={{ shape: 0.65 }}
+                      hue={225}
+                      expression={happy}
+                      animate="hover"
+                      size={36}
+                    />
                   </div>
                 </div>
 
-                {/* Message Body */}
-                <div className="message-body">
-                  {/* User Attachments (if any) */}
-                  {isUser && message.attachments && message.attachments.length > 0 && (
-                    <div className="user-attachments-grid">
-                      {message.attachments.map((att) => (
-                        <div key={att.id} className="user-attachment-pill">
-                          <Paperclip size={13} />
-                          <span className="user-attachment-name">{att.name}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
+                <div className="assistant-content-col">
                   {/* Assistant Thinking Step Timeline */}
-                  {!isUser && message.thinkingSteps && message.thinkingSteps.length > 0 && (
+                  {message.thinkingSteps && message.thinkingSteps.length > 0 && (
                     <div className="thinking-accordion">
                       <button
                         className="thinking-toggle-btn"
@@ -186,13 +284,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     </div>
                   )}
 
-                  {/* Main Message Text */}
+                  {/* Main Message Text (Rich Markdown Presentation) */}
                   <div className="message-content-text">
-                    {message.content}
+                    <MarkdownMessage content={message.content} />
                   </div>
 
                   {/* Interactive Artifact Cards */}
-                  {!isUser && message.artifacts && message.artifacts.length > 0 && (
+                  {message.artifacts && message.artifacts.length > 0 && (
                     <div className="artifacts-grid">
                       {message.artifacts.map((art) => {
                         if (art.type === 'video') {
@@ -202,6 +300,48 @@ export const ChatView: React.FC<ChatViewProps> = ({
                               artifact={art}
                               onDownloadArtifact={onDownloadArtifact}
                             />
+                          );
+                        }
+
+                        if (art.type === 'infographic') {
+                          const isHovered = hoveredArtifactId === art.id;
+                          return (
+                            <div
+                              key={art.id}
+                              className={`clean-image-deliverable ${isHovered ? 'is-hovered' : ''}`}
+                              onMouseEnter={() => setHoveredArtifactId(art.id)}
+                              onMouseLeave={() => setHoveredArtifactId(null)}
+                              onClick={() => onDownloadArtifact && onDownloadArtifact(art)}
+                              title="Click to download infographic"
+                            >
+                              <img
+                                src={art.thumbnailUrl || `/api/v1/artifacts/${art.id}/download`}
+                                alt={art.title}
+                                className="clean-image-img"
+                                onError={(e) => {
+                                  (e.currentTarget as HTMLElement).style.display = 'none';
+                                  const fallback = (e.currentTarget.parentElement?.querySelector(
+                                    '.image-artifact-fallback'
+                                  ) as HTMLElement | null);
+                                  if (fallback) fallback.style.display = 'flex';
+                                }}
+                              />
+                              <div className="image-artifact-fallback" style={{ display: 'none' }}>
+                                {getArtifactIcon(art.type)}
+                                <span className="fallback-ext">PNG</span>
+                              </div>
+                              <button
+                                className="image-download-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onDownloadArtifact && onDownloadArtifact(art);
+                                }}
+                                title="Download PNG"
+                                aria-label="Download image"
+                              >
+                                <Download size={15} />
+                              </button>
+                            </div>
                           );
                         }
 
@@ -287,27 +427,25 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   )}
 
                   {/* Message Actions */}
-                  {!isUser && (
-                    <div className="message-actions-row">
-                      <button
-                        className="msg-action-btn"
-                        onClick={() => {
-                          navigator.clipboard.writeText(message.content);
-                          alert('Copied to clipboard');
-                        }}
-                        title="Copy message"
-                      >
-                        <Copy size={13} />
-                      </button>
-                      <button
-                        className="msg-action-btn"
-                        onClick={() => alert('Regenerate turn')}
-                        title="Regenerate"
-                      >
-                        <RotateCcw size={13} />
-                      </button>
-                    </div>
-                  )}
+                  <div className="message-actions-row">
+                    <button
+                      className="msg-action-btn"
+                      onClick={() => {
+                        navigator.clipboard.writeText(message.content);
+                        showToast('Copied to clipboard', 'success');
+                      }}
+                      title="Copy message"
+                    >
+                      <Copy size={13} />
+                    </button>
+                    <button
+                      className="msg-action-btn"
+                      onClick={() => handleRegenerate(message.id)}
+                      title="Regenerate"
+                    >
+                      <RotateCcw size={13} />
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -316,18 +454,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {/* Real State Loading Indicator (active during isGenerating) */}
           {isGenerating && (
             <div className="message-row assistant-turn animate-fade-in">
-              <div className="message-header">
-                <div className="author-badge">
-                  <div className="avatar limo-avatar animate-pulse-subtle">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <path d="M4 4v16h16" />
-                      <polyline points="4 12 12 12 20 4" />
-                    </svg>
-                  </div>
-                  <span className="author-name">Limo</span>
+              <div className="limo-mascot-col">
+                <div className="limo-mascot-wrap animate-pulse-subtle" title="Limo">
+                  <Blobatar
+                    name="Limo"
+                    traits={{ shape: 0.65 }}
+                    hue={225}
+                    expression={happy}
+                    animate="hover"
+                    size={36}
+                  />
                 </div>
               </div>
-              <div className="message-body">
+              <div className="assistant-content-col">
                 <div className="generating-indicator">
                   <Sparkles size={16} className="generating-sparkle" />
                   <span>Processing prompt...</span>
@@ -369,7 +508,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           justify-content: space-between;
           padding: 0 24px;
           flex-shrink: 0;
-          background: #191918;
+          background: var(--bg-header);
+          transition: background-color 0.2s ease, border-color 0.2s ease;
         }
 
         .session-title-wrap {
@@ -391,8 +531,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
         .session-mode-badge {
           font-size: 10px;
           font-weight: 600;
-          background: rgba(255, 255, 255, 0.1);
-          color: #ffffff;
+          background: var(--bg-pill-active);
+          border: 1px solid var(--border-subtle);
+          color: var(--text-primary);
           padding: 2px 7px;
           border-radius: 9999px;
         }
@@ -408,11 +549,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
           padding: 4px 10px;
           border-radius: var(--radius-sm);
           cursor: pointer;
+          transition: all 0.12s ease;
         }
 
         .header-action-btn:hover {
           color: var(--text-primary);
-          background: rgba(255, 255, 255, 0.05);
+          background: var(--bg-sidebar-hover);
         }
 
         .chat-messages-container {
@@ -433,89 +575,218 @@ export const ChatView: React.FC<ChatViewProps> = ({
         }
 
         .message-row {
+          width: 100%;
+        }
+
+        .message-row.user-turn {
+          display: flex;
+          justify-content: flex-end;
+        }
+
+        .user-bubble-wrap {
+          max-width: 80%;
           display: flex;
           flex-direction: column;
-          gap: 8px;
+          align-items: flex-end;
+          gap: 6px;
         }
 
-        .message-header {
+        /* User Attachments Scroll Window (Capped to show 6 items, vertical scroll for more) */
+        .user-attachments-scroll-window {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          gap: 6px;
+          max-height: 388px; /* Cleanly displays up to 6 items */
+          overflow-y: auto;
+          overflow-x: hidden;
+          padding-right: 3px;
+          width: 100%;
+          max-width: 320px;
+          box-sizing: border-box;
+        }
+
+        /* User Message Document Card (ChatGPT Style) */
+        .chatgpt-file-card.user-chat-file-card {
           display: flex;
           align-items: center;
+          width: 300px;
+          max-width: 100%;
+          height: 56px;
+          border-radius: var(--radius-file-tile, 18px);
+          background: var(--bg-file-tile);
+          border: 1px solid var(--border-file-tile);
+          padding: 8px 12px;
+          gap: 10px;
+          box-shadow: var(--shadow-file-tile);
+          box-sizing: border-box;
+          flex-shrink: 0;
+          user-select: none;
         }
 
-        .author-badge {
+        .chatgpt-file-card.user-chat-file-card .file-card-meta {
           display: flex;
-          align-items: center;
-          gap: 8px;
+          flex-direction: column;
+          min-width: 0;
+          flex: 1;
+          justify-content: center;
         }
 
-        .avatar {
-          width: 24px;
-          height: 24px;
-          border-radius: 6px;
+        .chatgpt-file-card.user-chat-file-card .file-card-title {
+          font-size: 13.5px;
+          font-weight: 600;
+          color: var(--text-primary);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          line-height: 1.25;
+        }
+
+        .chatgpt-file-card.user-chat-file-card .file-card-subtitle {
+          font-size: 12px;
+          font-weight: 400;
+          color: var(--text-muted);
+          line-height: 1.2;
+          margin-top: 2px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        /* 2x2 Image Grid (ChatGPT Style) */
+        .user-images-2x2-grid {
+          display: grid;
+          grid-template-columns: repeat(2, 126px);
+          grid-template-rows: repeat(2, 126px);
+          gap: 4px;
+          border-radius: 18px;
+          overflow: hidden;
+          box-shadow: var(--shadow-file-tile);
+          border: 1px solid var(--border-file-tile);
+          background: var(--bg-file-tile);
+          flex-shrink: 0;
+        }
+
+        .grid-2x2-item {
+          width: 126px;
+          height: 126px;
+          overflow: hidden;
+        }
+
+        .grid-2x2-item:nth-child(1) .grid-img-el {
+          border-top-left-radius: 15px;
+        }
+        .grid-2x2-item:nth-child(2) .grid-img-el {
+          border-top-right-radius: 15px;
+        }
+        .grid-2x2-item:nth-child(3) .grid-img-el {
+          border-bottom-left-radius: 15px;
+        }
+        .grid-2x2-item:nth-child(4) .grid-img-el {
+          border-bottom-right-radius: 15px;
+        }
+
+        .grid-img-el {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        /* Flex Image Grid for 1-3 Images */
+        .user-images-flex-grid {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+          gap: 4px;
+          max-width: 300px;
+          flex-shrink: 0;
+        }
+
+        .user-image-bubble-card {
+          border-radius: 14px;
+          overflow: hidden;
+          border: 1px solid var(--border-file-tile);
+          box-shadow: var(--shadow-file-tile);
+        }
+
+        .user-images-flex-grid.count-1 .user-image-bubble-card {
+          width: 200px;
+          height: 200px;
+        }
+
+        .user-images-flex-grid.count-2 .user-image-bubble-card,
+        .user-images-flex-grid.count-3 .user-image-bubble-card {
+          width: 120px;
+          height: 120px;
+        }
+
+        .user-message-bubble {
+          background-color: var(--bg-user-bubble);
+          border: 1px solid var(--border-subtle);
+          color: var(--text-primary);
+          font-size: 15px;
+          line-height: 1.55;
+          padding: 9px 16px;
+          border-radius: 20px;
+          word-break: break-word;
+          white-space: pre-wrap;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+          display: inline-block;
+        }
+
+        .message-row.assistant-turn {
+          display: flex;
+          flex-direction: row;
+          align-items: flex-start;
+          gap: 14px;
+        }
+
+        .limo-mascot-col {
+          flex-shrink: 0;
+          display: flex;
+          align-items: flex-start;
+          padding-top: 2px;
+        }
+
+        .limo-mascot-wrap {
+          width: 36px;
+          height: 36px;
+          border-radius: 50%;
+          overflow: hidden;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 11px;
-          font-weight: 600;
+          cursor: pointer;
+          transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
         }
 
-        .user-avatar {
-          background: #334155;
-          color: #ffffff;
+        .limo-mascot-wrap:hover {
+          transform: scale(1.1);
         }
 
-        .limo-avatar {
-          background: #ffffff;
-          color: #141413;
+        .limo-mascot-wrap svg {
+          width: 36px;
+          height: 36px;
+          display: block;
         }
 
-        .author-name {
-          font-size: 13px;
-          font-weight: 600;
-          color: var(--text-primary);
-        }
-
-        .message-body {
-          padding-left: 32px;
+        .assistant-content-col {
+          flex: 1;
+          min-width: 0;
           display: flex;
           flex-direction: column;
           gap: 12px;
-        }
-
-        .user-attachments-grid {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-        }
-
-        .user-attachment-pill {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          background: rgba(255, 255, 255, 0.07);
-          border: 1px solid var(--border-subtle);
-          padding: 4px 10px;
-          border-radius: var(--radius-md);
-          font-size: 12px;
-          color: var(--text-secondary);
-        }
-
-        .user-turn .message-content-text {
-          color: #ffffff;
-          font-size: 15px;
-          line-height: 1.6;
         }
 
         .assistant-turn .message-content-text {
           color: var(--text-primary);
           font-size: 14.5px;
           line-height: 1.65;
-          white-space: pre-wrap;
         }
 
         .thinking-accordion {
-          background: rgba(255, 255, 255, 0.03);
+          background: var(--bg-pill);
           border: 1px solid var(--border-subtle);
           border-radius: var(--radius-md);
           overflow: hidden;
@@ -532,11 +803,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
           color: var(--text-muted);
           font-size: 12px;
           cursor: pointer;
+          transition: all 0.12s ease;
         }
 
         .thinking-toggle-btn:hover {
-          color: var(--text-secondary);
-          background: rgba(255, 255, 255, 0.03);
+          color: var(--text-primary);
+          background: var(--bg-pill-hover);
         }
 
         .thinking-toggle-left {
@@ -551,7 +823,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
         .thinking-timeline-body {
           padding: 12px 14px;
-          border-top: 1px solid rgba(255, 255, 255, 0.05);
+          border-top: 1px solid var(--border-subtle);
           display: flex;
           flex-direction: column;
           gap: 12px;
@@ -577,7 +849,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         .step-line {
           width: 1px;
           flex: 1;
-          background: rgba(255, 255, 255, 0.1);
+          background: var(--border-medium);
           margin-top: 4px;
           min-height: 16px;
         }
@@ -606,7 +878,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         }
 
         .artifact-card {
-          background: #1f1f1e;
+          background: var(--bg-card);
           border: 1px solid var(--border-medium);
           border-radius: var(--radius-card);
           padding: 16px 18px;
@@ -614,12 +886,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
           flex-direction: column;
           gap: 12px;
           max-width: 520px;
-          transition: border-color 0.15s ease, box-shadow 0.15s ease;
+          transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.2s ease;
+          box-shadow: var(--shadow-card);
         }
 
         .artifact-card:hover {
-          border-color: rgba(255, 255, 255, 0.2);
-          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+          border-color: var(--border-focus);
+          box-shadow: var(--shadow-composer);
         }
 
         .artifact-header-row {
@@ -647,6 +920,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         .artifact-icon-sheet { color: #4ade80; }
         .artifact-icon-video { color: #c084fc; }
         .artifact-icon-audio { color: #f59e0b; }
+        .artifact-icon-image { color: #ec4899; }
         .artifact-icon-website { color: #38bdf8; }
         .artifact-icon-code { color: #fb923c; }
 
@@ -669,8 +943,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           display: flex;
           align-items: center;
           gap: 6px;
-          background: rgba(255, 255, 255, 0.08);
-          border: 1px solid rgba(255, 255, 255, 0.14);
+          background: var(--bg-pill);
+          border: 1px solid var(--border-medium);
           border-radius: var(--radius-pill);
           color: var(--text-primary);
           font-size: 12px;
@@ -682,14 +956,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
         }
 
         .artifact-download-pill:hover {
-          background: rgba(255, 255, 255, 0.15);
-          border-color: rgba(255, 255, 255, 0.25);
+          background: var(--bg-pill-hover);
+          border-color: var(--border-focus);
         }
 
         .artifact-title {
           font-size: 14px;
           font-weight: 600;
-          color: #ffffff;
+          color: var(--text-primary);
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -698,8 +972,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
         .format-badge {
           font-size: 11px;
           font-weight: 600;
-          background: rgba(255, 255, 255, 0.08);
-          color: #cbd5e1;
+          background: var(--bg-pill-hover);
+          border: 1px solid var(--border-subtle);
+          color: var(--text-secondary);
           padding: 2px 8px;
           border-radius: 4px;
           white-space: nowrap;
@@ -710,7 +985,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         .artifact-subagent-summary {
           font-size: 12.5px;
           line-height: 1.5;
-          color: #a1a1aa;
+          color: var(--text-muted);
           margin: 0;
         }
 
@@ -730,23 +1005,117 @@ export const ChatView: React.FC<ChatViewProps> = ({
           border-radius: 9999px;
           font-size: 13px;
           font-weight: 600;
-          color: #141413;
-          background: #f4f4f3;
-          border: 1px solid #e2e2e0;
+          color: var(--send-btn-text-active);
+          background: var(--send-btn-bg-active);
+          border: 1px solid var(--border-medium);
           cursor: pointer;
           transition: all 0.15s ease;
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+          box-shadow: var(--shadow-card);
         }
 
         .artifact-edit-pill:hover {
-          background: #ffffff;
-          border-color: #ffffff;
+          background: var(--send-btn-bg-hover);
           transform: translateY(-1px);
-          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
         }
 
         .artifact-edit-pill:active {
           transform: translateY(0);
+        }
+
+        /* Clean ChatGPT-Style Image Output */
+        .clean-image-deliverable {
+          position: relative;
+          align-self: flex-start;
+          display: inline-flex;
+          width: fit-content;
+          max-width: 100%;
+          border-radius: 18px;
+          overflow: hidden;
+          line-height: 0;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+          cursor: pointer;
+          transition: box-shadow 0.2s ease;
+        }
+
+        .clean-image-deliverable:hover {
+          box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+        }
+
+        .clean-image-img {
+          display: block;
+          width: auto;
+          height: auto;
+          max-width: 100%;
+          max-height: 540px;
+          object-fit: contain;
+          border-radius: 18px;
+          filter: none;
+          opacity: 1;
+          transition: none;
+        }
+
+        /* Crucial: image stays 100% sharp, bright and unaffected during hover */
+        .clean-image-deliverable:hover .clean-image-img {
+          filter: none !important;
+          opacity: 1 !important;
+          transform: none !important;
+        }
+
+        .clean-image-deliverable:hover .image-download-btn,
+        .clean-image-deliverable.is-hovered .image-download-btn {
+          opacity: 1;
+          visibility: visible;
+          pointer-events: auto;
+          transform: translateY(0);
+        }
+
+        .image-artifact-fallback {
+          width: 240px;
+          height: 180px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          background: var(--bg-thumbnail);
+          color: var(--text-muted);
+          border-radius: 18px;
+        }
+
+        /* Small, compact top-right download button (ChatGPT style interaction) */
+        .image-download-btn {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          z-index: 10;
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(20, 20, 19, 0.72);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+          border: 1px solid rgba(255, 255, 255, 0.22);
+          color: #ffffff;
+          cursor: pointer;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+          opacity: 0;
+          visibility: hidden;
+          pointer-events: none;
+          transform: translateY(-2px);
+          transition: opacity 0.18s ease, visibility 0.18s ease, transform 0.18s ease, background-color 0.15s ease, border-color 0.15s ease;
+        }
+
+        .image-download-btn:hover {
+          background: rgba(20, 20, 19, 0.92);
+          border-color: rgba(255, 255, 255, 0.4);
+          transform: translateY(0) scale(1.06);
+        }
+
+        .image-download-btn:active {
+          transform: translateY(0) scale(0.96);
         }
 
         .artifact-thumbnail-container {
@@ -755,8 +1124,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           height: 118px;
           border-radius: 8px;
           overflow: hidden;
-          background: #141413;
-          border: 1px solid rgba(255, 255, 255, 0.12);
+          background: var(--bg-thumbnail);
+          border: 1px solid var(--border-subtle);
           cursor: pointer;
           flex-shrink: 0;
         }
@@ -782,15 +1151,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
           align-items: center;
           justify-content: center;
           gap: 6px;
-          background: #1b1b1a;
-          color: #94a3b8;
+          background: var(--bg-thumbnail);
+          color: var(--text-muted);
         }
 
         .fallback-ext {
           font-size: 10px;
           font-weight: 700;
           letter-spacing: 0.5px;
-          color: #64748b;
+          color: var(--text-muted);
         }
 
         .artifact-thumbnail-overlay {
@@ -799,7 +1168,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           display: flex;
           align-items: center;
           justify-content: center;
-          background: rgba(0, 0, 0, 0.25);
+          background: rgba(0, 0, 0, 0.35);
           opacity: 0;
           transition: opacity 0.2s ease;
           pointer-events: none;
@@ -813,13 +1182,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
           width: 40px;
           height: 40px;
           border-radius: 50%;
-          background: #141413;
-          border: 1px solid rgba(255, 255, 255, 0.2);
+          background: var(--send-btn-bg-active);
+          border: 1px solid var(--border-medium);
           display: flex;
           align-items: center;
           justify-content: center;
-          color: #ffffff;
-          box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+          color: var(--send-btn-text-active);
+          box-shadow: var(--shadow-card);
           transition: transform 0.15s ease;
         }
 
@@ -841,11 +1210,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
           cursor: pointer;
           padding: 4px;
           border-radius: 4px;
+          transition: all 0.12s ease;
         }
 
         .msg-action-btn:hover {
           color: var(--text-primary);
-          background: rgba(255, 255, 255, 0.06);
+          background: var(--bg-sidebar-hover);
         }
 
         .generating-indicator {

@@ -31,6 +31,7 @@ class EngineType(StrEnum):
     NATIVE_INFOGRAPHIC = "native_infographic"  # Phase D6.3: Native SVG/diagram adapter
     NATIVE_MARKDOWN = "native_markdown"        # Phase D6.3: Native Markdown/HTML adapter
     TTS_ENGINE = "tts_engine"                  # Phase D8.3: Standalone TTS & Voice Layer
+    PRISMO_ENGINE = "prismo_engine"            # Phase D8.8: Prismo Poster & Infographic Engine
 
 
 class TransformationRequest(LimoBaseModel):

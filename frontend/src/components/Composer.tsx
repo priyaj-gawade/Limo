@@ -17,6 +17,8 @@ import {
   Volume2
 } from 'lucide-react';
 import { FeatureMode, ModelSpeed, AttachmentFile, VoiceOption, VoiceCatalogResponse } from '../types';
+import { getFileCategory, getCategorySubtitle, renderAttachmentBadge } from '../utils/attachmentUtils';
+import { useToast } from '../context/ToastContext';
 
 interface ComposerProps {
   mode: FeatureMode;
@@ -45,6 +47,7 @@ export const Composer: React.FC<ComposerProps> = ({
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [selectedVoice, setSelectedVoice] = useState<VoiceOption | null>(null);
   const [voiceMenuOpen, setVoiceMenuOpen] = useState(false);
+  const { showToast } = useToast();
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -119,18 +122,22 @@ export const Composer: React.FC<ComposerProps> = ({
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  const addFiles = (fileList: File[]) => {
+    if (!fileList || fileList.length === 0) return;
 
-    const fileList = Array.from(files);
-    const newAttachments: AttachmentFile[] = fileList.map((f) => ({
-      id: `att-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      name: f.name,
-      size: f.size,
-      type: f.type || 'application/octet-stream',
-      uploadStatus: 'uploading',
-    }));
+    const newAttachments: AttachmentFile[] = fileList.map((f) => {
+      const category = getFileCategory(f.name, f.type);
+      const isImg = category === 'image';
+      return {
+        id: `att-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        name: f.name,
+        size: f.size,
+        type: f.type || 'application/octet-stream',
+        fileCategory: category,
+        previewUrl: isImg ? URL.createObjectURL(f) : undefined,
+        uploadStatus: 'uploading',
+      };
+    });
 
     setAttachments((prev) => [...prev, ...newAttachments]);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -177,6 +184,26 @@ export const Composer: React.FC<ComposerProps> = ({
     });
   };
 
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      addFiles(Array.from(files));
+    }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length > 0) {
+      e.preventDefault();
+      addFiles(Array.from(e.clipboardData.files));
+    }
+  };
+
+  const handleAttachmentsWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (e.deltaY !== 0) {
+      e.currentTarget.scrollLeft += e.deltaY;
+    }
+  };
+
   const removeAttachment = (id: string) => {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   };
@@ -205,9 +232,24 @@ export const Composer: React.FC<ComposerProps> = ({
   const modeInfo = getModeInfo(mode);
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !disabled && !hasInFlightUploads;
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      addFiles(Array.from(e.dataTransfer.files));
+    }
+  };
+
   return (
     <div className="limo-composer-container">
-      <div className="limo-composer-card">
+      <div
+        className="limo-composer-card"
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
         {/* Active Mode Pill inside composer with proper Lucide X */}
         {mode !== 'none' && mode !== 'audio' && (
           <div className="composer-mode-banner">
@@ -227,34 +269,67 @@ export const Composer: React.FC<ComposerProps> = ({
           </div>
         )}
 
-        {/* Attachment Chips row */}
+        {/* Attachment Window (Horizontal page scroll, items hide behind boundaries) */}
         {attachments.length > 0 && (
-          <div className="composer-attachments-row">
-            {attachments.map((file) => (
-              <div key={file.id} className={`attachment-chip ${file.uploadStatus || 'done'}`}>
-                {file.uploadStatus === 'uploading' ? (
-                  <Loader2 size={12} className="chip-icon spinning" />
-                ) : file.uploadStatus === 'error' ? (
-                  <X size={12} className="chip-icon chip-error" />
-                ) : (
-                  <Paperclip size={12} className="chip-icon" />
-                )}
-                <span className="chip-name">{file.name}</span>
-                {file.uploadStatus === 'uploading' && (
-                  <span className="chip-uploading-tag">Uploading...</span>
-                )}
-                {file.uploadStatus === 'error' && (
-                  <span className="chip-error-tag">Failed</span>
-                )}
-                <button
-                  className="chip-remove-btn"
-                  onClick={() => removeAttachment(file.id)}
-                  title="Remove file"
-                >
-                  <X size={11} />
-                </button>
-              </div>
-            ))}
+          <div
+            className="composer-attachments-window slim-scrollbar"
+            onWheel={handleAttachmentsWheel}
+          >
+            {attachments.map((file) => {
+              const category = file.fileCategory || getFileCategory(file.name, file.type);
+              const isImage = category === 'image' && file.previewUrl;
+
+              if (isImage) {
+                return (
+                  <div key={file.id} className="composer-image-thumb-card">
+                    <img src={file.previewUrl} alt={file.name} className="composer-image-preview" />
+                    {file.uploadStatus === 'uploading' && (
+                      <div className="thumb-upload-overlay">
+                        <Loader2 size={13} className="spinning" />
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="thumb-close-btn"
+                      onClick={() => removeAttachment(file.id)}
+                      title={`Remove ${file.name}`}
+                      aria-label={`Remove ${file.name}`}
+                    >
+                      <X size={11} />
+                    </button>
+                  </div>
+                );
+              }
+
+              return (
+                <div key={file.id} className={`chatgpt-file-card ${file.uploadStatus || 'done'}`}>
+                  <div className="file-card-badge-wrap">
+                    {renderAttachmentBadge(category)}
+                  </div>
+                  <div className="file-card-meta">
+                    <div className="file-card-title" title={file.name}>{file.name}</div>
+                    <div className="file-card-subtitle">
+                      {getCategorySubtitle(category, file.name)}
+                      {file.uploadStatus === 'uploading' && (
+                        <span className="file-card-status uploading"> • Uploading...</span>
+                      )}
+                      {file.uploadStatus === 'error' && (
+                        <span className="file-card-status error"> • Failed</span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="file-card-remove-btn"
+                    onClick={() => removeAttachment(file.id)}
+                    title={`Remove ${file.name}`}
+                    aria-label={`Remove ${file.name}`}
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -267,6 +342,7 @@ export const Composer: React.FC<ComposerProps> = ({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           disabled={disabled}
         />
 
@@ -455,7 +531,7 @@ export const Composer: React.FC<ComposerProps> = ({
         <div className="composer-meta-row">
           <button
             className="meta-dropdown-btn"
-            onClick={() => alert('Project Context: Select or switch project workspace')}
+            onClick={() => showToast('Project Context: Select or switch project workspace', 'info')}
           >
             <Folder size={14} className="meta-icon" />
             <span>Select project</span>
@@ -481,12 +557,12 @@ export const Composer: React.FC<ComposerProps> = ({
           display: flex;
           flex-direction: column;
           gap: 8px;
-          transition: border-color 0.18s ease, box-shadow 0.18s ease;
+          transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.2s ease;
         }
 
         .limo-composer-card:focus-within {
           border-color: var(--border-focus);
-          box-shadow: 0 10px 36px rgba(0, 0, 0, 0.55);
+          box-shadow: var(--shadow-composer);
         }
 
         .composer-mode-banner {
@@ -500,9 +576,9 @@ export const Composer: React.FC<ComposerProps> = ({
           display: inline-flex;
           align-items: center;
           gap: 6px;
-          background: rgba(255, 255, 255, 0.12);
-          border: 1px solid rgba(255, 255, 255, 0.2);
-          color: #ffffff;
+          background: var(--bg-pill-active);
+          border: 1px solid var(--border-medium);
+          color: var(--text-primary);
           padding: 4px 10px;
           border-radius: var(--radius-pill);
           font-size: 12px;
@@ -527,14 +603,14 @@ export const Composer: React.FC<ComposerProps> = ({
         }
 
         .pill-close-btn:hover {
-          color: #ffffff;
-          background: rgba(255, 255, 255, 0.2);
+          color: var(--text-primary);
+          background: var(--bg-pill-hover);
         }
 
         .active-mode-pill.audio-mode-pill {
           background: rgba(245, 158, 11, 0.12);
           border: 1px solid rgba(245, 158, 11, 0.28);
-          color: #fbbf24;
+          color: #d97706;
         }
 
         .active-mode-pill.audio-mode-pill:hover {
@@ -543,12 +619,12 @@ export const Composer: React.FC<ComposerProps> = ({
         }
 
         .active-mode-pill.audio-mode-pill .pill-close-btn {
-          color: rgba(251, 191, 36, 0.7);
+          color: rgba(217, 119, 6, 0.7);
         }
 
         .active-mode-pill.audio-mode-pill .pill-close-btn:hover {
-          color: #ffffff;
-          background: rgba(245, 158, 11, 0.3);
+          color: #d97706;
+          background: rgba(245, 158, 11, 0.2);
         }
 
         .mode-status-hint {
@@ -556,59 +632,146 @@ export const Composer: React.FC<ComposerProps> = ({
           color: var(--text-muted);
         }
 
-        .composer-attachments-row {
+        /* Attachment Window (Horizontal page scroll, clips at chatbox boundary) */
+        .composer-attachments-window {
           display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-          padding-bottom: 6px;
+          flex-direction: row;
+          flex-wrap: nowrap;
+          gap: 10px;
+          overflow-x: auto;
+          overflow-y: hidden;
+          width: 100%;
+          max-width: 100%;
+          padding: 2px 2px 8px 2px;
+          box-sizing: border-box;
+          align-items: center;
+          scroll-behavior: smooth;
+          -webkit-overflow-scrolling: touch;
         }
 
-        .attachment-chip {
+        /* Image Thumbnail in Composer */
+        .composer-image-thumb-card {
+          width: 56px;
+          height: 56px;
+          border-radius: 12px;
+          overflow: hidden;
+          position: relative;
+          flex-shrink: 0;
+          border: 1px solid var(--border-file-tile);
+          background: var(--bg-card);
+          box-shadow: var(--shadow-file-tile);
+        }
+
+        .composer-image-preview {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .thumb-upload-overlay {
+          position: absolute;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.45);
           display: flex;
           align-items: center;
-          gap: 6px;
-          background: rgba(255, 255, 255, 0.07);
-          border: 1px solid rgba(255, 255, 255, 0.12);
-          border-radius: var(--radius-md);
-          padding: 4px 10px;
-          font-size: 12px;
+          justify-content: center;
+          color: #ffffff;
+        }
+
+        .thumb-close-btn {
+          position: absolute;
+          top: 3px;
+          right: 3px;
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          background: rgba(0, 0, 0, 0.68);
+          color: #ffffff;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border: none;
+          cursor: pointer;
+          transition: background 0.15s ease, transform 0.1s ease;
+          padding: 0;
+        }
+
+        .thumb-close-btn:hover {
+          background: rgba(0, 0, 0, 0.9);
+          transform: scale(1.08);
+        }
+
+        /* ChatGPT Document Card in Composer */
+        .chatgpt-file-card {
+          display: flex;
+          align-items: center;
+          width: 290px;
+          max-width: 290px;
+          min-width: 260px;
+          height: 56px;
+          border-radius: var(--radius-file-tile, 18px);
+          background: var(--bg-file-tile);
+          border: 1px solid var(--border-file-tile);
+          padding: 8px 12px;
+          gap: 10px;
+          flex-shrink: 0;
+          box-shadow: var(--shadow-file-tile);
+          transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+          box-sizing: border-box;
+          user-select: none;
+        }
+
+        .chatgpt-file-card:hover {
+          background: var(--bg-file-tile-hover);
+          border-color: var(--border-file-tile-hover);
+        }
+
+        .file-card-badge-wrap {
+          flex-shrink: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .file-card-meta {
+          display: flex;
+          flex-direction: column;
+          min-width: 0;
+          flex: 1;
+          justify-content: center;
+        }
+
+        .file-card-title {
+          font-size: 13.5px;
+          font-weight: 600;
           color: var(--text-primary);
-        }
-
-        .chip-icon.spinning {
-          animation: spin 1s linear infinite;
-          color: var(--text-secondary);
-        }
-
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-
-        .chip-uploading-tag {
-          font-size: 10px;
-          color: rgba(255, 255, 255, 0.5);
-          margin-left: 2px;
-        }
-
-        .chip-error-tag {
-          font-size: 10px;
-          color: #ef4444;
-          margin-left: 2px;
-        }
-
-        .chip-icon.chip-error {
-          color: #ef4444;
-        }
-
-        .chip-name {
-          max-width: 180px;
+          white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
-          white-space: nowrap;
+          line-height: 1.25;
         }
 
-        .chip-remove-btn {
+        .file-card-subtitle {
+          font-size: 12px;
+          font-weight: 400;
+          color: var(--text-muted);
+          line-height: 1.2;
+          margin-top: 2px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .file-card-status.uploading {
+          color: var(--accent-blue);
+        }
+
+        .file-card-status.error {
+          color: #ef4444;
+        }
+
+        .file-card-remove-btn {
           background: transparent;
           border: none;
           color: var(--text-muted);
@@ -616,11 +779,21 @@ export const Composer: React.FC<ComposerProps> = ({
           display: flex;
           align-items: center;
           justify-content: center;
-          padding: 2px;
+          width: 24px;
+          height: 24px;
+          border-radius: 50%;
+          flex-shrink: 0;
+          transition: background 0.15s ease, color 0.15s ease;
+          padding: 0;
         }
 
-        .chip-remove-btn:hover {
-          color: #f87171;
+        .file-card-remove-btn:hover {
+          color: var(--text-primary);
+          background: var(--bg-pill-hover);
+        }
+
+        .chip-icon.spinning {
+          animation: spin 1s linear infinite;
         }
 
         .composer-textarea {
@@ -670,7 +843,7 @@ export const Composer: React.FC<ComposerProps> = ({
 
         .attach-btn:hover {
           color: var(--text-primary);
-          background: rgba(255, 255, 255, 0.07);
+          background: var(--bg-pill-hover);
         }
 
         .voice-dropdown-wrapper {
@@ -681,8 +854,8 @@ export const Composer: React.FC<ComposerProps> = ({
           display: flex;
           align-items: center;
           gap: 6px;
-          background: rgba(255, 255, 255, 0.05);
-          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: var(--bg-pill);
+          border: 1px solid var(--border-subtle);
           border-radius: var(--radius-pill);
           color: var(--text-secondary);
           font-size: 12px;
@@ -694,8 +867,8 @@ export const Composer: React.FC<ComposerProps> = ({
 
         .voice-selector-btn:hover {
           color: var(--text-primary);
-          background: rgba(255, 255, 255, 0.09);
-          border-color: rgba(255, 255, 255, 0.18);
+          background: var(--bg-pill-hover);
+          border-color: var(--border-focus);
         }
 
         .voice-icon {
@@ -718,28 +891,28 @@ export const Composer: React.FC<ComposerProps> = ({
           text-transform: uppercase;
           letter-spacing: 0.04em;
           font-weight: 600;
-          background: rgba(255, 255, 255, 0.08);
+          background: var(--bg-pill);
           color: var(--text-muted);
         }
 
         .voice-provider-tag.azure {
           background: rgba(59, 130, 246, 0.15);
-          color: #60a5fa;
+          color: #3b82f6;
         }
 
         .voice-provider-tag.openai {
           background: rgba(16, 185, 129, 0.15);
-          color: #34d399;
+          color: #10b981;
         }
 
         .voice-provider-tag.piper {
           background: rgba(168, 85, 247, 0.15);
-          color: #c084fc;
+          color: #8b5cf6;
         }
 
         .voice-provider-tag.edge_tts {
           background: rgba(245, 158, 11, 0.15);
-          color: #fbbf24;
+          color: #d97706;
         }
 
         .voice-chevron {
@@ -753,7 +926,7 @@ export const Composer: React.FC<ComposerProps> = ({
           width: 260px;
           max-height: 320px;
           overflow-y: auto;
-          background: #242423;
+          background: var(--bg-dropdown);
           border: 1px solid var(--border-medium);
           border-radius: var(--radius-card);
           box-shadow: var(--shadow-dropdown);
@@ -774,7 +947,7 @@ export const Composer: React.FC<ComposerProps> = ({
           padding: 6px 10px 2px 10px;
           font-size: 10px;
           font-weight: 600;
-          color: rgba(255, 255, 255, 0.35);
+          color: var(--text-muted);
           text-transform: uppercase;
         }
 
@@ -789,11 +962,11 @@ export const Composer: React.FC<ComposerProps> = ({
         }
 
         .voice-option:hover {
-          background: rgba(255, 255, 255, 0.06);
+          background: var(--bg-sidebar-hover);
         }
 
         .voice-option.selected {
-          background: rgba(255, 255, 255, 0.1);
+          background: var(--bg-sidebar-active);
         }
 
         .voice-opt-left {
@@ -805,7 +978,7 @@ export const Composer: React.FC<ComposerProps> = ({
         .voice-opt-name {
           font-size: 13px;
           font-weight: 500;
-          color: #ffffff;
+          color: var(--text-primary);
         }
 
         .voice-opt-lang {
@@ -829,22 +1002,22 @@ export const Composer: React.FC<ComposerProps> = ({
 
         .voice-opt-badge.azure {
           background: rgba(59, 130, 246, 0.15);
-          color: #60a5fa;
+          color: #3b82f6;
         }
 
         .voice-opt-badge.openai {
           background: rgba(16, 185, 129, 0.15);
-          color: #34d399;
+          color: #10b981;
         }
 
         .voice-opt-badge.piper {
           background: rgba(168, 85, 247, 0.15);
-          color: #c084fc;
+          color: #8b5cf6;
         }
 
         .voice-opt-badge.edge_tts {
           background: rgba(245, 158, 11, 0.15);
-          color: #fbbf24;
+          color: #d97706;
         }
 
         .voice-opt-check {
@@ -877,7 +1050,7 @@ export const Composer: React.FC<ComposerProps> = ({
 
         .speed-selector-btn:hover {
           color: var(--text-primary);
-          background: rgba(255, 255, 255, 0.05);
+          background: var(--bg-sidebar-hover);
         }
 
         .speed-label {
@@ -899,7 +1072,7 @@ export const Composer: React.FC<ComposerProps> = ({
           bottom: calc(100% + 8px);
           right: 0;
           width: 220px;
-          background: #242423;
+          background: var(--bg-dropdown);
           border: 1px solid var(--border-medium);
           border-radius: var(--radius-card);
           box-shadow: var(--shadow-dropdown);
@@ -915,17 +1088,17 @@ export const Composer: React.FC<ComposerProps> = ({
         }
 
         .speed-option:hover {
-          background: rgba(255, 255, 255, 0.06);
+          background: var(--bg-sidebar-hover);
         }
 
         .speed-option.selected {
-          background: rgba(255, 255, 255, 0.1);
+          background: var(--bg-sidebar-active);
         }
 
         .speed-opt-header {
           font-size: 13px;
           font-weight: 600;
-          color: #ffffff;
+          color: var(--text-primary);
         }
 
         .speed-opt-desc {
@@ -946,21 +1119,21 @@ export const Composer: React.FC<ComposerProps> = ({
         }
 
         .send-button.disabled {
-          background: rgba(255, 255, 255, 0.12);
-          color: rgba(255, 255, 255, 0.28);
+          background: var(--send-btn-bg-disabled);
+          color: var(--send-btn-text-disabled);
           cursor: not-allowed;
         }
 
         .send-button.active {
-          background: #ffffff;
-          color: #181817;
+          background: var(--send-btn-bg-active);
+          color: var(--send-btn-text-active);
           cursor: pointer;
-          box-shadow: 0 2px 10px rgba(255, 255, 255, 0.3);
+          box-shadow: var(--shadow-card);
         }
 
         .send-button.active:hover {
           transform: scale(1.05);
-          background: #f4f4f3;
+          background: var(--send-btn-bg-hover);
         }
 
         .send-button.generate-mode {
@@ -982,7 +1155,7 @@ export const Composer: React.FC<ComposerProps> = ({
           align-items: center;
           gap: 16px;
           padding-top: 8px;
-          border-top: 1px solid rgba(255, 255, 255, 0.05);
+          border-top: 1px solid var(--border-subtle);
         }
 
         .meta-dropdown-btn {
@@ -1001,7 +1174,7 @@ export const Composer: React.FC<ComposerProps> = ({
 
         .meta-dropdown-btn:hover {
           color: var(--text-primary);
-          background: rgba(255, 255, 255, 0.05);
+          background: var(--bg-sidebar-hover);
         }
 
         .meta-icon {

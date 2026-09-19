@@ -19,6 +19,7 @@ from ...models.generation_config import GenerationConfig
 from ...models.generation_contracts import GenOfficePayload, VideoEnginePayload
 from ...models.transformation import EngineRoute, EngineType, PlannedDeliverable
 from .adapters.base import BaseNativeAdapter
+from .adapters.image_adapter import PrismoImageAdapter
 from .adapters.infographic_adapter import NativeInfographicAdapter
 from .adapters.markdown_adapter import NativeHtmlAdapter, NativeMarkdownAdapter
 from .adapters.social_adapter import NativeSocialAdapter
@@ -106,10 +107,10 @@ class EngineRouter:
         ),
         OutputFormat.INFOGRAPHIC: EngineRoute(
             format=OutputFormat.INFOGRAPHIC,
-            engine_type=EngineType.NATIVE_INFOGRAPHIC,
-            target_extension=".svg",
+            engine_type=EngineType.PRISMO_ENGINE,
+            target_extension=".png",
             is_implemented=True,
-            target_phase="D6.3 (Native Adapters)",
+            target_phase="D8.8 (Prismo Integration)",
             dispatch_endpoint=None,
         ),
         OutputFormat.MARKDOWN: EngineRoute(
@@ -139,18 +140,19 @@ class EngineRouter:
     }
 
     def __init__(self):
-        # Instantiate singleton adapters for native formats and video
+        # Instantiate singleton adapters for native formats, video, and prismo
         self._markdown_adapter = NativeMarkdownAdapter()
         self._html_adapter = NativeHtmlAdapter()
         self._social_adapter = NativeSocialAdapter()
-        self._infographic_adapter = NativeInfographicAdapter()
+        self._infographic_adapter = NativeInfographicAdapter()  # Preserved for backward reference
+        self._prismo_adapter = PrismoImageAdapter()             # Authoritative D8.8 poster engine
         self._video_adapter = OpenMontageVideoAdapter()
         self._native_adapters: Dict[OutputFormat, Any] = {
             OutputFormat.MARKDOWN: self._markdown_adapter,
             OutputFormat.HTML: self._html_adapter,
             OutputFormat.LINKEDIN: self._social_adapter,
             OutputFormat.TWITTER: self._social_adapter,
-            OutputFormat.INFOGRAPHIC: self._infographic_adapter,
+            OutputFormat.INFOGRAPHIC: self._prismo_adapter,
             OutputFormat.VIDEO: self._video_adapter,
         }
 
@@ -184,6 +186,8 @@ class EngineRouter:
         config: Optional[GenerationConfig] = None,
         project_id: Optional[str] = None,
         job_id: Optional[str] = None,
+        unified_input: Optional[Any] = None,
+        progress_callback: Optional[Any] = None,
     ) -> Optional[Artifact]:
         """Dispatch execution. Executes native adapters or blocks unimplemented external engines."""
         if not route.is_implemented:
@@ -199,16 +203,37 @@ class EngineRouter:
             )
 
         # Implemented native engine execution
-        if deliverable and canonical:
+        if deliverable and (canonical or unified_input):
             adapter = self.get_native_adapter(deliverable.format)
             effective_config = config or GenerationConfig()
-            artifact = adapter.execute(
-                canonical=canonical,
-                deliverable=deliverable,
-                config=effective_config,
-                project_id=project_id,
-                job_id=job_id,
-            )
+
+            if deliverable.format == OutputFormat.INFOGRAPHIC:
+                artifact = adapter.execute(
+                    canonical=canonical,
+                    deliverable=deliverable,
+                    config=effective_config,
+                    project_id=project_id,
+                    job_id=job_id,
+                    unified_input=unified_input,
+                    progress_callback=progress_callback,
+                )
+            elif deliverable.format == OutputFormat.VIDEO:
+                artifact = adapter.execute(
+                    canonical=canonical,
+                    deliverable=deliverable,
+                    config=effective_config,
+                    project_id=project_id,
+                    job_id=job_id,
+                    progress_callback=progress_callback,
+                )
+            else:
+                artifact = adapter.execute(
+                    canonical=canonical,
+                    deliverable=deliverable,
+                    config=effective_config,
+                    project_id=project_id,
+                    job_id=job_id,
+                )
             return artifact
 
         return None
