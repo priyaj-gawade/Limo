@@ -33,8 +33,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     storage_service.ensure_directories()
     init_db()
 
+    # Reconcile stale/abandoned jobs from previous runs and start background workers
+    from .services.job_queue import job_queue_manager
+    job_queue_manager.reconcile_on_startup()
+    job_queue_manager.start_workers()
+
     yield
     logger.info("Shutting down %s", settings.app_name)
+    await job_queue_manager.stop_workers()
 
 
 def create_app() -> FastAPI:

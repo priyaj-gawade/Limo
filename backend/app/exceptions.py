@@ -92,6 +92,23 @@ class InvalidStateError(LimoException):
         )
 
 
+class QueueFullError(LimoException):
+    """Raised when the transformation worker queue has reached capacity (429 Backpressure)."""
+
+    def __init__(
+        self,
+        message: str = "Transformation worker queue is at capacity. Please retry shortly.",
+        details: Optional[Any] = None,
+        retry_after_sec: int = 5,
+    ):
+        super().__init__(
+            message=message,
+            error_code="QUEUE_FULL",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            details=details or {"retry_after_sec": retry_after_sec},
+        )
+
+
 class UnsupportedFormatError(BadRequestError):
     """Raised when an output format is not in the recognized OutputFormat registry."""
 

@@ -6,17 +6,42 @@ import re
 import subprocess
 import tempfile
 from typing import Any, Dict, Generator, List, Optional
-from fastapi import APIRouter, Header, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from ...auth.config import auth_config
+from ...auth.dependencies import authorize_resource, get_current_user
 from ...exceptions import BadRequestError, EntityNotFoundError
 from ...models.artifact import Artifact, ArtifactVersion
 from ...models.enums import ArtifactType
 from ...models.provenance import CitationVerification, ProvenanceRecord, ValidationResult
+from ...models.user import User
 from ...services.artifact_service import artifact_service
+from ...services.job_service import job_service
+from ...services.project_service import project_service
 
 router = APIRouter(prefix="/artifacts", tags=["Artifacts"])
+
+
+def _authorize_artifact(artifact: Artifact, current_user: User) -> None:
+    """Check multi-tenant authorization for an artifact."""
+    if auth_config.is_desktop_surface:
+        return
+    owner_id = artifact.metadata.get("user_id") if isinstance(artifact.metadata, dict) else None
+    if not owner_id and artifact.project_id:
+        try:
+            proj = project_service.get_project(artifact.project_id)
+            owner_id = proj.user_id
+        except Exception:
+            pass
+    if not owner_id and artifact.job_id:
+        try:
+            job = job_service.get_job(artifact.job_id)
+            owner_id = job.user_id
+        except Exception:
+            pass
+    authorize_resource(owner_id, current_user)
 
 
 def _iter_file_range(file_path: str, start: int, end: int, chunk_size: int = 64 * 1024) -> Generator[bytes, None, None]:
@@ -106,8 +131,21 @@ class RecordProvenanceRequest(BaseModel):
 
 
 @router.post("", response_model=Artifact, status_code=status.HTTP_201_CREATED)
-async def register_artifact(req: RegisterArtifactRequest) -> Artifact:
+async def register_artifact(
+    req: RegisterArtifactRequest,
+    current_user: User = Depends(get_current_user),
+) -> Artifact:
     """Register a generated deliverable. Rejects registration if referenced file does not exist."""
+    if req.project_id:
+        proj = project_service.get_project(req.project_id)
+        authorize_resource(proj.user_id, current_user)
+    if req.job_id:
+        job = job_service.get_job(req.job_id)
+        authorize_resource(job.user_id, current_user)
+
+    metadata = dict(req.metadata)
+    metadata["user_id"] = current_user.id
+
     return artifact_service.register_artifact(
         title=req.title,
         artifact_type=req.artifact_type,
@@ -117,7 +155,7 @@ async def register_artifact(req: RegisterArtifactRequest) -> Artifact:
         job_id=req.job_id,
         description=req.description,
         stats=req.stats,
-        metadata=req.metadata,
+        metadata=metadata,
     )
 
 
@@ -126,25 +164,51 @@ async def list_artifacts(
     project_id: Optional[str] = Query(None, description="Filter deliverables by project"),
     job_id: Optional[str] = Query(None, description="Filter deliverables by generating job"),
     artifact_type: Optional[ArtifactType] = Query(None, description="Filter deliverables by category"),
+    current_user: User = Depends(get_current_user),
 ) -> List[Artifact]:
     """List deliverables with optional filtering, ordered by created_at DESC."""
-    return artifact_service.list_artifacts(
+    if project_id:
+        proj = project_service.get_project(project_id)
+        authorize_resource(proj.user_id, current_user)
+    if job_id:
+        job = job_service.get_job(job_id)
+        authorize_resource(job.user_id, current_user)
+
+    artifacts = artifact_service.list_artifacts(
         project_id=project_id,
         job_id=job_id,
         artifact_type=artifact_type,
     )
 
+    if auth_config.is_web_surface:
+        user_projects = {p.id for p in project_service.list_projects(user_id=current_user.id)}
+        artifacts = [
+            a for a in artifacts
+            if a.metadata.get("user_id") == current_user.id or (a.project_id and a.project_id in user_projects)
+        ]
+
+    return artifacts
+
 
 @router.get("/{artifact_id}", response_model=Artifact)
-async def get_artifact(artifact_id: str) -> Artifact:
+async def get_artifact(
+    artifact_id: str,
+    current_user: User = Depends(get_current_user),
+) -> Artifact:
     """Retrieve metadata, version, and status for a deliverable artifact."""
-    return artifact_service.get_artifact(artifact_id)
+    artifact = artifact_service.get_artifact(artifact_id)
+    _authorize_artifact(artifact, current_user)
+    return artifact
 
 
 @router.get("/{artifact_id}/download")
-async def download_artifact(artifact_id: str) -> Response:
+async def download_artifact(
+    artifact_id: str,
+    current_user: User = Depends(get_current_user),
+) -> Response:
     """Download verified raw deliverable binary with cryptographic SHA-256 verification."""
     artifact = artifact_service.get_artifact(artifact_id)
+    _authorize_artifact(artifact, current_user)
     content = artifact_service.read_artifact_content(artifact_id)
 
     # Determine appropriate MIME media type
@@ -160,13 +224,37 @@ async def download_artifact(artifact_id: str) -> Response:
     )
 
 
+@router.get("/{artifact_id}/preview")
+async def preview_artifact(
+    artifact_id: str,
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    """Preview deliverable content inline with resource authorization."""
+    artifact = artifact_service.get_artifact(artifact_id)
+    _authorize_artifact(artifact, current_user)
+    content = artifact_service.read_artifact_content(artifact_id)
+
+    media_type, _ = mimetypes.guess_type(f"artifact{artifact.file_format}")
+    if not media_type:
+        media_type = "text/plain"
+
+    filename = f"{artifact.title.replace(' ', '_')}{artifact.file_format}"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
 @router.get("/{artifact_id}/stream")
 async def stream_artifact(
     artifact_id: str,
     range_header: Optional[str] = Header(None, alias="Range"),
+    current_user: User = Depends(get_current_user),
 ) -> Response:
     """Stream deliverable with HTTP 206 Partial Content Range support for smooth seeking."""
     artifact = artifact_service.get_artifact(artifact_id)
+    _authorize_artifact(artifact, current_user)
     try:
         file_path = artifact_service.storage.safe_resolve(artifact.storage_ref)
     except Exception:
@@ -236,9 +324,13 @@ async def stream_artifact(
 
 
 @router.get("/{artifact_id}/thumbnail")
-async def get_artifact_thumbnail(artifact_id: str) -> Response:
+async def get_artifact_thumbnail(
+    artifact_id: str,
+    current_user: User = Depends(get_current_user),
+) -> Response:
     """Stream rendered page thumbnail for an artifact."""
     artifact = artifact_service.get_artifact(artifact_id)
+    _authorize_artifact(artifact, current_user)
     thumb_ref = artifact.metadata.get("thumbnail_storage_ref") or f"artifacts/{artifact_id}/thumbnail.png"
     if artifact_service.storage.file_exists(thumb_ref):
         thumb_bytes = artifact_service.storage.read_file(thumb_ref)
@@ -270,11 +362,15 @@ async def get_artifact_thumbnail(artifact_id: str) -> Response:
 
 
 @router.post("/{artifact_id}/open")
-async def open_artifact_in_workspace(artifact_id: str) -> Dict[str, Any]:
+async def open_artifact_in_workspace(
+    artifact_id: str,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
     """Open the artifact directly in GenOffice workspace."""
     from ...services.transformation.genoffice_client import genoffice_client
 
     artifact = artifact_service.get_artifact(artifact_id)
+    _authorize_artifact(artifact, current_user)
     genoffice_path = artifact.metadata.get("genoffice_file_path")
     if not genoffice_path:
         # Fallback to physical sandboxed path if absolute genoffice_file_path is missing
@@ -299,8 +395,14 @@ async def open_artifact_in_workspace(artifact_id: str) -> Dict[str, Any]:
 
 
 @router.post("/{artifact_id}/versions", response_model=ArtifactVersion, status_code=status.HTTP_201_CREATED)
-async def create_artifact_version(artifact_id: str, req: CreateVersionRequest) -> ArtifactVersion:
+async def create_artifact_version(
+    artifact_id: str,
+    req: CreateVersionRequest,
+    current_user: User = Depends(get_current_user),
+) -> ArtifactVersion:
     """Create a new historical revision snapshot for an artifact."""
+    artifact = artifact_service.get_artifact(artifact_id)
+    _authorize_artifact(artifact, current_user)
     return artifact_service.create_artifact_version(
         artifact_id=artifact_id,
         storage_ref=req.storage_ref,
@@ -309,14 +411,25 @@ async def create_artifact_version(artifact_id: str, req: CreateVersionRequest) -
 
 
 @router.get("/{artifact_id}/versions", response_model=List[ArtifactVersion])
-async def list_artifact_versions(artifact_id: str) -> List[ArtifactVersion]:
+async def list_artifact_versions(
+    artifact_id: str,
+    current_user: User = Depends(get_current_user),
+) -> List[ArtifactVersion]:
     """List historical revision snapshots for an artifact."""
+    artifact = artifact_service.get_artifact(artifact_id)
+    _authorize_artifact(artifact, current_user)
     return artifact_service.get_artifact_versions(artifact_id)
 
 
 @router.post("/{artifact_id}/validation", response_model=ValidationResult, status_code=status.HTTP_201_CREATED)
-async def record_validation(artifact_id: str, req: RecordValidationRequest) -> ValidationResult:
+async def record_validation(
+    artifact_id: str,
+    req: RecordValidationRequest,
+    current_user: User = Depends(get_current_user),
+) -> ValidationResult:
     """Record an automated validation and citation verification report."""
+    artifact = artifact_service.get_artifact(artifact_id)
+    _authorize_artifact(artifact, current_user)
     return artifact_service.record_validation_result(
         artifact_id=artifact_id,
         is_valid=req.is_valid,
@@ -329,14 +442,25 @@ async def record_validation(artifact_id: str, req: RecordValidationRequest) -> V
 
 
 @router.get("/{artifact_id}/validation", response_model=Optional[ValidationResult])
-async def get_validation(artifact_id: str) -> Optional[ValidationResult]:
+async def get_validation(
+    artifact_id: str,
+    current_user: User = Depends(get_current_user),
+) -> Optional[ValidationResult]:
     """Get the latest verification report for an artifact."""
+    artifact = artifact_service.get_artifact(artifact_id)
+    _authorize_artifact(artifact, current_user)
     return artifact_service.get_validation_result(artifact_id)
 
 
 @router.post("/{artifact_id}/provenance", response_model=ProvenanceRecord, status_code=status.HTTP_201_CREATED)
-async def record_provenance(artifact_id: str, req: RecordProvenanceRequest) -> ProvenanceRecord:
+async def record_provenance(
+    artifact_id: str,
+    req: RecordProvenanceRequest,
+    current_user: User = Depends(get_current_user),
+) -> ProvenanceRecord:
     """Record a cryptographic provenance ledger entry for an artifact."""
+    artifact = artifact_service.get_artifact(artifact_id)
+    _authorize_artifact(artifact, current_user)
     return artifact_service.record_provenance(
         artifact_id=artifact_id,
         source_hashes=req.source_hashes,
@@ -349,6 +473,11 @@ async def record_provenance(artifact_id: str, req: RecordProvenanceRequest) -> P
 
 
 @router.get("/{artifact_id}/provenance", response_model=Optional[ProvenanceRecord])
-async def get_provenance(artifact_id: str) -> Optional[ProvenanceRecord]:
+async def get_provenance(
+    artifact_id: str,
+    current_user: User = Depends(get_current_user),
+) -> Optional[ProvenanceRecord]:
     """Get the cryptographic provenance record for an artifact."""
+    artifact = artifact_service.get_artifact(artifact_id)
+    _authorize_artifact(artifact, current_user)
     return artifact_service.get_provenance(artifact_id)

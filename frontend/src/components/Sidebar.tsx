@@ -16,10 +16,14 @@ import {
   ArrowDownToLine,
   Trash2,
   Sun,
-  Moon
+  Moon,
+  LogIn,
+  LogOut,
+  User as UserIcon
 } from 'lucide-react';
-import { FeatureMode, ChatSession } from '../types';
+import { FeatureMode, ChatSession, User } from '../types';
 import { useToast } from '../context/ToastContext';
+import { LimoNavbarLogo } from './LimoNavbarLogo';
 
 interface SidebarProps {
   collapsed: boolean;
@@ -36,6 +40,10 @@ interface SidebarProps {
   onDeleteSession: (id: string, e: React.MouseEvent) => void;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
+  user?: User | null;
+  isAuthenticated?: boolean;
+  onOpenLogin?: () => void;
+  onLogout?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -52,7 +60,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onNewChat,
   onDeleteSession,
   theme,
-  onToggleTheme
+  onToggleTheme,
+  user,
+  isAuthenticated = false,
+  onOpenLogin,
+  onLogout
 }) => {
   const { showToast } = useToast();
   const creationModes: { id: FeatureMode; label: string; icon: React.ReactNode; isCore: boolean }[] = [
@@ -83,10 +95,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <>
             <div className="brand-badge" onClick={onNewChat} title="Limo Conversational AI">
               <div className="brand-logo-icon">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M4 4v16h16" />
-                  <polyline points="4 12 12 12 20 4" />
-                </svg>
+                <LimoNavbarLogo size={28} />
               </div>
               <span className="brand-title">Limo</span>
             </div>
@@ -195,16 +204,55 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Bottom Profile Bar */}
       <div className="sidebar-footer">
-        <div className="profile-container">
-          <div className="avatar-circle" title="User Profile">
-            <span>P</span>
-          </div>
-          {!collapsed && (
-            <div className="profile-info">
-              <span className="user-name">Priyaj ...</span>
+        {!isAuthenticated ? (
+          <div
+            className="profile-container login-trigger"
+            onClick={onOpenLogin}
+            title="Log in"
+            role="button"
+            tabIndex={0}
+            aria-label="Log in"
+          >
+            <div className="avatar-circle login-avatar" title="Log in">
+              <UserIcon size={16} />
             </div>
-          )}
-        </div>
+            {!collapsed && <span className="login-label-text">Log in</span>}
+          </div>
+        ) : (
+          <div className="profile-auth-group">
+            <div
+              className="profile-container authenticated"
+              title={`Signed in as ${user?.display_name || user?.email || 'User'}`}
+              role="button"
+              tabIndex={0}
+            >
+              {user?.avatar_url ? (
+                <img
+                  src={user.avatar_url}
+                  alt={user.display_name || 'User'}
+                  className="user-google-avatar"
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                  }}
+                />
+              ) : (
+                <div className="avatar-circle user-initials-avatar">
+                  <span>{(user?.display_name || user?.email || 'U')[0].toUpperCase()}</span>
+                </div>
+              )}
+            </div>
+            {!collapsed && onLogout && (
+              <button
+                className="logout-action-btn"
+                onClick={onLogout}
+                title="Sign out of your account"
+                aria-label="Log out"
+              >
+                <LogOut size={14} />
+              </button>
+            )}
+          </div>
+        )}
 
         {!collapsed && (
           <div className="footer-actions">
@@ -282,14 +330,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
         .brand-logo-icon {
           width: 28px;
           height: 28px;
-          background: var(--brand-icon-bg);
-          color: var(--brand-icon-color);
-          border-radius: 8px;
+          min-width: 28px;
+          min-height: 28px;
+          background: transparent;
+          border-radius: 0;
           display: flex;
           align-items: center;
           justify-content: center;
-          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
-          transition: all 0.15s ease;
+          box-shadow: none;
+          flex-shrink: 0;
+          transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .brand-badge:hover .brand-logo-icon {
+          transform: scale(1.08);
         }
 
         .brand-title {
@@ -662,15 +716,43 @@ export const Sidebar: React.FC<SidebarProps> = ({
           justify-content: center;
         }
 
+        .profile-auth-group {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
         .profile-container {
           display: flex;
           align-items: center;
-          gap: 10px;
+          gap: 8px;
           cursor: pointer;
+          border-radius: var(--radius-sm);
+          padding: 3px 6px 3px 3px;
+          transition: background-color 0.15s ease;
+          user-select: none;
+        }
+
+        .profile-container:hover {
+          background-color: var(--bg-sidebar-hover);
+        }
+
+        .login-label-text {
+          font-size: 13px;
+          font-weight: 500;
+          color: var(--text-secondary);
+          letter-spacing: -0.01em;
+          white-space: nowrap;
+        }
+
+        .profile-container:hover .login-label-text {
+          color: var(--text-primary);
         }
 
         .limo-sidebar.collapsed .profile-container {
           justify-content: center;
+          padding: 4px 0;
+          gap: 0;
         }
 
         .avatar-circle {
@@ -686,12 +768,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
           font-weight: 600;
           color: var(--avatar-color);
           transition: all 0.15s ease;
+          flex-shrink: 0;
         }
 
-        .user-name {
-          font-size: 13px;
-          font-weight: 500;
+        .login-avatar {
+          background: var(--avatar-bg, rgba(255, 255, 255, 0.08));
+          border-color: var(--avatar-border, var(--border-medium));
+          color: var(--text-secondary);
+        }
+
+        .login-trigger:hover .login-avatar {
+          background: var(--bg-sidebar-hover);
           color: var(--text-primary);
+          border-color: var(--border-focus);
+        }
+
+        .user-google-avatar {
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          object-fit: cover;
+          border: 1px solid var(--border-medium);
+          flex-shrink: 0;
+        }
+
+        .logout-action-btn {
+          background: transparent;
+          border: none;
+          color: var(--text-muted);
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 6px;
+          border-radius: var(--radius-sm);
+          transition: all 0.12s ease;
+        }
+
+        .logout-action-btn:hover {
+          color: #ef4444;
+          background: rgba(239, 68, 68, 0.1);
         }
 
         .footer-actions {

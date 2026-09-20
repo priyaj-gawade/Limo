@@ -60,6 +60,8 @@ class InfographicOptions(BaseModel):
 class SpreadsheetOptions(BaseModel):
     """Output-specific parameters for tabular workbooks (GenOffice Sheets)."""
     include_charts: bool = Field(default=True, description="Whether to include summary charts")
+    table_theme: str = Field(default="corporate", description="Table styling theme (e.g. 'corporate', 'modern')")
+    freeze_header: bool = Field(default=True, description="Whether to freeze the header row")
 
 
 class AudioOptions(BaseModel):
@@ -68,8 +70,6 @@ class AudioOptions(BaseModel):
     voice_id: Optional[str] = Field(default=None, description="Voice identifier")
     speed: float = Field(default=1.0, ge=0.25, le=4.0, description="Speech rate multiplier")
     output_format: str = Field(default="mp3", description="Audio container extension")
-    table_theme: str = Field(default="corporate", description="Table styling theme (e.g. 'corporate', 'modern')")
-    freeze_header: bool = Field(default=True, description="Whether to freeze the header row")
 
 
 class GenerationConfig(LimoBaseModel):

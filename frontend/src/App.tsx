@@ -3,7 +3,10 @@ import { Sidebar } from './components/Sidebar';
 import { HomeScreen } from './components/HomeScreen';
 import { ChatView } from './components/ChatView';
 import { ConfirmModal } from './components/ConfirmModal';
+import { LoginModal } from './components/LoginModal';
 import { useToast } from './context/ToastContext';
+import { useAuth } from './context/AuthContext';
+import { LogIn } from 'lucide-react';
 import { FeatureMode, ModelSpeed, AttachmentFile, ChatSession, Artifact, ChatMessage } from './types';
 import { getFileCategory } from './utils/attachmentUtils';
 
@@ -13,6 +16,7 @@ const ACTIVE_SESSION_KEY = 'limo_active_session_id';
 const THEME_STORAGE_KEY = 'limo_theme';
 
 export const App: React.FC = () => {
+  const { user, isAuthenticated, isLoginModalOpen, openLoginModal, closeLoginModal, logout } = useAuth();
   const [currentView, setCurrentView] = useState<'limo' | 'genoffice'>('limo');
 
   // Theme state with localStorage persistence and system theme fallback
@@ -81,8 +85,13 @@ export const App: React.FC = () => {
 
   // Fetch messages for a specific session
   const fetchMessages = async (sessionId: string) => {
+    if (!isAuthenticated) return [];
     try {
       const res = await fetch(`/api/v1/chats/${sessionId}/messages`);
+      if (res.status === 401) {
+        openLoginModal();
+        return [];
+      }
       if (res.ok) {
         const data: any[] = await res.json();
         const mapped: ChatMessage[] = data.map((m) => {
@@ -142,10 +151,18 @@ export const App: React.FC = () => {
     return [];
   };
 
-  // Fetch sessions list from backend on mount
+  // Fetch sessions list from backend on mount or auth change
   const fetchSessions = async () => {
+    if (!isAuthenticated) {
+      setSessions([]);
+      return [];
+    }
     try {
       const res = await fetch('/api/v1/chats');
+      if (res.status === 401) {
+        setSessions([]);
+        return [];
+      }
       if (res.ok) {
         const data: any[] = await res.json();
         const mapped: ChatSession[] = data.map((s) => ({
@@ -165,23 +182,31 @@ export const App: React.FC = () => {
     return [];
   };
 
-  // Initial load and restoration from SQLite
+  // Initial load and restoration from SQLite conditioned on authentication
   useEffect(() => {
-    fetchSessions().then((loaded) => {
-      const saved = localStorage.getItem(ACTIVE_SESSION_KEY);
-      if (saved && loaded.some((s) => s.id === saved)) {
-        setActiveSessionId(saved);
-        const match = loaded.find((s) => s.id === saved);
-        if (match) setActiveMode(match.mode);
-        fetchMessages(saved);
-      } else {
-        setActiveSessionId(null);
-        try {
-          localStorage.removeItem(ACTIVE_SESSION_KEY);
-        } catch {}
-      }
-    });
-  }, []);
+    if (isAuthenticated) {
+      fetchSessions().then((loaded) => {
+        const saved = localStorage.getItem(ACTIVE_SESSION_KEY);
+        if (saved && loaded.some((s) => s.id === saved)) {
+          setActiveSessionId(saved);
+          const match = loaded.find((s) => s.id === saved);
+          if (match) setActiveMode(match.mode);
+          fetchMessages(saved);
+        } else {
+          setActiveSessionId(null);
+          try {
+            localStorage.removeItem(ACTIVE_SESSION_KEY);
+          } catch {}
+        }
+      });
+    } else {
+      setSessions([]);
+      setActiveSessionId(null);
+      try {
+        localStorage.removeItem(ACTIVE_SESSION_KEY);
+      } catch {}
+    }
+  }, [isAuthenticated]);
 
   // Global keyboard shortcut Ctrl+K / Cmd+K for new chat
   useEffect(() => {
@@ -193,9 +218,14 @@ export const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [isAuthenticated]);
 
   const handleNewChat = () => {
+    if (!isAuthenticated) {
+      openLoginModal();
+      showToast('Please sign in with Google to start a conversation', 'info');
+      return;
+    }
     setActiveSessionId(null);
     try {
       localStorage.removeItem(ACTIVE_SESSION_KEY);
@@ -204,7 +234,20 @@ export const App: React.FC = () => {
     setCurrentView('limo');
   };
 
+  const handleSelectMode = (mode: FeatureMode) => {
+    if (!isAuthenticated && mode !== 'none') {
+      openLoginModal();
+      showToast('Please sign in with Google to use creation modes', 'info');
+      return;
+    }
+    setActiveMode(mode);
+  };
+
   const handleSelectSession = (id: string) => {
+    if (!isAuthenticated) {
+      openLoginModal();
+      return;
+    }
     setActiveSessionId(id);
     try {
       localStorage.setItem(ACTIVE_SESSION_KEY, id);
@@ -247,6 +290,13 @@ export const App: React.FC = () => {
     speed: ModelSpeed,
     voiceConfig?: { provider: string; voice_id: string; speed?: number }
   ) => {
+    // Strict authentication gate: fail closed on client before dispatching
+    if (!isAuthenticated) {
+      openLoginModal();
+      showToast('Please sign in with Google to use Limo', 'info');
+      return;
+    }
+
     let targetSessionId = activeSessionId;
     const tempUserMsg: ChatMessage = {
       id: `temp-${Date.now()}`,
@@ -265,6 +315,11 @@ export const App: React.FC = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title, mode: activeMode }),
         });
+        if (res.status === 401) {
+          openLoginModal();
+          showToast('Session expired. Please sign in again.', 'error');
+          return;
+        }
         if (res.ok) {
           const created = await res.json();
           targetSessionId = created.id;
@@ -323,6 +378,13 @@ export const App: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(turnPayload),
       });
+
+      if (turnRes.status === 401) {
+        setIsGenerating(false);
+        openLoginModal();
+        showToast('Session expired. Please sign in again.', 'error');
+        return;
+      }
 
       if (turnRes.ok) {
         await fetchMessages(targetSessionId);
@@ -407,7 +469,7 @@ export const App: React.FC = () => {
           onViewChange={setCurrentView}
           onGenOfficeClick={handleGenOfficeNavClick}
           activeMode={activeMode}
-          onSelectMode={setActiveMode}
+          onSelectMode={handleSelectMode}
           sessions={sessions}
           activeSessionId={activeSessionId}
           onSelectSession={handleSelectSession}
@@ -415,6 +477,10 @@ export const App: React.FC = () => {
           onDeleteSession={handleRequestDeleteSession}
           theme={theme}
           onToggleTheme={toggleTheme}
+          user={user}
+          isAuthenticated={isAuthenticated}
+          onOpenLogin={openLoginModal}
+          onLogout={logout}
         />
 
         {/* Main Conversational Stage (Zero persistent canvas, strictly chat-first) */}
@@ -423,7 +489,7 @@ export const App: React.FC = () => {
             <ChatView
               session={activeSession}
               activeMode={activeMode}
-              onSelectMode={setActiveMode}
+              onSelectMode={handleSelectMode}
               onSend={handleSend}
               isGenerating={isGenerating}
               onOpenInWorkspace={handleOpenInWorkspace}
@@ -432,7 +498,7 @@ export const App: React.FC = () => {
           ) : (
             <HomeScreen
               activeMode={activeMode}
-              onSelectMode={setActiveMode}
+              onSelectMode={handleSelectMode}
               onSend={handleSend}
             />
           )}
@@ -449,6 +515,12 @@ export const App: React.FC = () => {
         isDestructive={true}
         onConfirm={handleConfirmDeleteSession}
         onCancel={() => setSessionToDelete(null)}
+      />
+
+      {/* Centered Two-Column Google Login Modal */}
+      <LoginModal
+        isOpen={isLoginModalOpen}
+        onClose={closeLoginModal}
       />
 
       <style>{`
@@ -478,6 +550,89 @@ export const App: React.FC = () => {
           flex-direction: column;
           overflow: hidden;
           background-color: var(--bg-canvas);
+          position: relative;
+        }
+
+        .stage-top-bar {
+          position: absolute;
+          top: 14px;
+          right: 20px;
+          z-index: 20;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          pointer-events: auto;
+        }
+
+        .top-login-pill-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          background: var(--bg-pill, #1c1d22);
+          border: 1px solid var(--border-medium, rgba(255, 255, 255, 0.12));
+          color: var(--text-primary, #ffffff);
+          font-size: 12px;
+          font-weight: 600;
+          padding: 6px 14px;
+          border-radius: var(--radius-pill, 20px);
+          cursor: pointer;
+          transition: all 0.16s ease;
+          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+          user-select: none;
+        }
+
+        .top-login-pill-btn:hover {
+          background: var(--bg-pill-hover, #262830);
+          border-color: rgba(255, 255, 255, 0.25);
+          transform: translateY(-1px);
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .top-user-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          background: var(--bg-pill, #1c1d22);
+          border: 1px solid var(--border-medium, rgba(255, 255, 255, 0.12));
+          padding: 4px 10px 4px 5px;
+          border-radius: var(--radius-pill, 20px);
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+
+        .top-user-badge:hover {
+          background: var(--bg-pill-hover, #262830);
+          border-color: rgba(255, 255, 255, 0.25);
+        }
+
+        .top-user-avatar-img {
+          width: 24px;
+          height: 24px;
+          border-radius: 50%;
+          object-fit: cover;
+        }
+
+        .top-user-avatar-placeholder {
+          width: 24px;
+          height: 24px;
+          border-radius: 50%;
+          background: var(--avatar-bg, #3b82f6);
+          color: #ffffff;
+          font-size: 11px;
+          font-weight: 700;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .top-user-name {
+          font-size: 12px;
+          font-weight: 500;
+          color: var(--text-primary);
+          max-width: 110px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .limo-toast-container {

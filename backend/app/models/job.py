@@ -49,6 +49,12 @@ class TransformationJob(LimoBaseModel):
         default_factory=list,
         description="IDs of deliverables successfully generated and registered by this job"
     )
+    user_id: Optional[str] = Field(default=None, description="Owning user ID if created under authenticated surface")
+    execution_id: Optional[str] = Field(default=None, description="Active execution attempt run ID")
+    worker_id: Optional[str] = Field(default=None, description="ID of the background worker executing the job")
+    attempt_count: int = Field(default=0, ge=0, description="Total execution attempt count")
+    claimed_at: Optional[datetime] = Field(default=None, description="Timestamp when worker acquired execution claim")
+    cancellation_requested: bool = Field(default=False, description="Whether cooperative cancellation was requested")
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="UTC job enqueue timestamp"

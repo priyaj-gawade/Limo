@@ -2,9 +2,31 @@
 -- ACID-compliant relational storage for core application entities.
 -- Foreign keys and WAL mode must be enabled by the connection manager.
 
+-- 0. Users table (stable application identity)
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL DEFAULT 'google',
+    provider_subject TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL,
+    display_name TEXT,
+    avatar_url TEXT,
+    created_at TEXT NOT NULL,
+    last_login_at TEXT NOT NULL
+);
+
+-- 0b. User sessions table (secure HTTP-only web sessions)
+CREATE TABLE IF NOT EXISTS user_sessions (
+    session_token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    last_accessed_at TEXT NOT NULL
+);
+
 -- 1. Projects table
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
     name TEXT NOT NULL,
     description TEXT,
     created_at TEXT NOT NULL,
@@ -57,6 +79,7 @@ CREATE TABLE IF NOT EXISTS messages (
 -- 5. Transformation jobs table
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
     project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
     session_id TEXT REFERENCES chats(id) ON DELETE SET NULL,
     prompt TEXT,
@@ -68,6 +91,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     current_stage TEXT,
     error TEXT,
     artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+    execution_id TEXT,
+    worker_id TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    claimed_at TEXT,
+    cancellation_requested INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -152,6 +180,17 @@ CREATE TABLE IF NOT EXISTS provenance (
     CONSTRAINT uq_provenance_artifact_hash UNIQUE (artifact_id, artifact_hash)
 );
 
+-- 11. Job events table (durable SSE event replay)
+CREATE TABLE IF NOT EXISTS job_events (
+    event_id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    CONSTRAINT uq_job_event_seq UNIQUE (job_id, sequence)
+);
+
 -- ============================================================================
 -- Performance Indexes for Real Query Patterns
 -- ============================================================================
@@ -163,3 +202,4 @@ CREATE INDEX IF NOT EXISTS idx_jobs_project_created ON jobs(project_id, created_
 CREATE INDEX IF NOT EXISTS idx_artifacts_project_created ON artifacts(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_artifact_versions_artifact_version ON artifact_versions(artifact_id, version_number);
 CREATE INDEX IF NOT EXISTS idx_provenance_artifact_created ON provenance(artifact_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_job_events_job_seq ON job_events(job_id, sequence ASC);

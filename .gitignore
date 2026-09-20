@@ -7,6 +7,10 @@
 .env.*
 *.env
 !.env.example
+credentials/
+credentials/**
+!credentials/*.example
+client_secret_*.json
 *.pem
 *.key
 *.cert
@@ -81,6 +85,8 @@ renders/
 **/renders/**
 backlot/
 **/backlot/**
+frontend/public/logos/
+frontend/public/logos/**
 atlas-map.md
 
 # 6. Python Environment & Bytecode Caches

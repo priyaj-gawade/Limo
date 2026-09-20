@@ -276,10 +276,13 @@ class JobArtifactHandoffService:
         job = self.job_svc.get_job(job_id)
         return job.configuration.format_overrides.get("blocked_contracts", {})
 
-    def verify_job_artifact_linkage(self, job_id: str) -> bool:
+    def verify_job_artifact_linkage(self, job_id: str, require_non_empty: bool = False) -> bool:
         """Verify bidirectional referential integrity between job and its registered artifacts."""
         job = self.job_svc.get_job(job_id)
         artifacts = self.art_svc.list_artifacts(job_id=job_id)
+
+        if require_non_empty and len(artifacts) == 0:
+            return False
 
         # 1. Assert job.artifact_ids matches list of artifacts linked to job_id
         job_art_set = set(job.artifact_ids)

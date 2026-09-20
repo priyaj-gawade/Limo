@@ -3,7 +3,8 @@
 import logging
 from typing import Any, List, Optional, Tuple
 
-from ..exceptions import BadRequestError, EntityNotFoundError
+from ..db.connection import get_connection
+from ..exceptions import BadRequestError, EntityNotFoundError, QueueFullError
 from ..models.artifact import Artifact
 from ..models.content import CanonicalContent
 from ..models.enums import FeatureMode, JobState, OutputFormat
@@ -83,6 +84,7 @@ class TransformService:
         session_id: Optional[str] = None,
         canonical_id: Optional[str] = None,
         feature_mode: Optional[FeatureMode] = None,
+        user_id: Optional[str] = None,
     ) -> TransformationJob:
         """Validate inputs, resolve D6.1 configuration and D6.2 plan, and persist contract.
 
@@ -154,7 +156,12 @@ class TransformService:
             effective_config.format_overrides["transformation_request"] = request.model_dump(mode="json")
             effective_formats = request.requested_formats
 
-        # Enqueue transformation contract
+        # 1. Queue capacity check upfront: if queue is full, immediately reject with 429 without persisting to DB
+        from .job_queue import job_queue_manager
+        if job_queue_manager.is_running() and job_queue_manager.is_full():
+            raise QueueFullError("Transformation worker queue is at capacity. Please retry shortly.")
+
+        # 2. Persist to SQLite
         job = self.job_svc.create_job(
             requested_formats=effective_formats,
             configuration=effective_config,
@@ -162,7 +169,22 @@ class TransformService:
             session_id=session_id,
             prompt=clean_prompt,
             source_ids=clean_source_ids,
+            user_id=user_id,
         )
+
+        # 3. Enqueue to worker if executable (has planned manifest); if enqueue fails, roll back newly created DB record
+        has_plan = bool(effective_config.format_overrides.get("output_plan"))
+        if job_queue_manager.is_running() and has_plan:
+            try:
+                job_queue_manager.enqueue(job.id)
+            except Exception as e:
+                try:
+                    with get_connection(self.job_svc.db_path) as conn:
+                        conn.execute("DELETE FROM jobs WHERE id = ?", (job.id,))
+                except Exception:
+                    pass
+                logger.error("Could not enqueue job '%s' to worker queue, rolled back DB record: %s", job.id, e)
+                raise
 
         logger.info(
             "Created transform contract '%s' (formats: %s, sources: %d, has_prompt: %s, has_canonical: %s)",

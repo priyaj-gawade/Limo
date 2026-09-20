@@ -112,3 +112,14 @@ export interface ChatSession {
   updatedAt: string;
   createdAt: string;
 }
+
+export interface User {
+  id: string;
+  provider: string;
+  provider_subject?: string;
+  email: string;
+  display_name?: string;
+  avatar_url?: string;
+  created_at?: string;
+  last_login_at?: string;
+}

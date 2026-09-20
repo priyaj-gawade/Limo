@@ -102,9 +102,18 @@ class TransformationWorkflowOrchestrator:
         logger.info("Cancellation requested for transformation workflow '%s'", workflow_id)
         return True
 
-    def is_cancelled(self, workflow_id: str) -> bool:
-        """Check if cancellation has been requested for this workflow."""
-        return workflow_id in self._cancelled_workflows
+    def is_cancelled(self, workflow_id: str, job_id: Optional[str] = None) -> bool:
+        """Check if cancellation has been requested for this workflow or parent job."""
+        if workflow_id in self._cancelled_workflows:
+            return True
+        if job_id:
+            try:
+                from ..job_queue import job_queue_manager
+                if job_queue_manager.is_cancellation_requested(job_id):
+                    return True
+            except Exception:
+                pass
+        return False
 
     def execute_workflow(
         self,
@@ -148,7 +157,7 @@ class TransformationWorkflowOrchestrator:
 
             # Check task-boundary cancellation: Active tasks may finish cleanly,
             # but pending tasks become SKIPPED, explicitly preventing newly starting tasks after cancellation.
-            if self.is_cancelled(workflow.id):
+            if self.is_cancelled(workflow.id, job_id=workflow.job_id):
                 logger.info(
                     "Workflow '%s' cancelled: skipping deliverable '%s' before task start",
                     workflow.id,
@@ -180,7 +189,7 @@ class TransformationWorkflowOrchestrator:
 
                 while attempt <= max_retries and not success:
                     task.retry_count = attempt
-                    if self.is_cancelled(workflow.id):
+                    if self.is_cancelled(workflow.id, job_id=workflow.job_id):
                         task.status = TaskStatus.SKIPPED
                         task.error = "Execution cancelled prior to task retry"
                         task.completed_at = datetime.now(timezone.utc)

@@ -32,6 +32,7 @@ class JobService:
         session_id: Optional[str] = None,
         prompt: Optional[str] = None,
         source_ids: Optional[List[str]] = None,
+        user_id: Optional[str] = None,
     ) -> TransformationJob:
         """Create and persist an execution contract for a multi-deliverable transformation request."""
         if not requested_formats:
@@ -44,6 +45,7 @@ class JobService:
                     raise EntityNotFoundError("Project", project_id)
 
             job = TransformationJob(
+                user_id=user_id,
                 project_id=project_id,
                 session_id=session_id,
                 prompt=prompt.strip() if prompt else None,
@@ -57,26 +59,26 @@ class JobService:
             created = JobRepository.create_job(conn, job)
             logger.info("Created transformation job '%s' (%d formats, %d sources)", created.id, len(requested_formats), len(job.source_ids))
 
-            # Emit job.created event at creation boundary (MUST-FIX #2)
-            try:
-                broker = self.event_broker
-                if broker is None:
-                    from .transformation.event_broker import event_broker as default_broker
-                    broker = default_broker
-                broker.emit(
-                    job_id=created.id,
-                    event_type=TransformationEventType.JOB_CREATED,
-                    payload={
-                        "project_id": created.project_id,
-                        "session_id": created.session_id,
-                        "requested_formats": [f.value for f in created.requested_formats],
-                        "source_count": len(created.source_ids),
-                    },
-                )
-            except Exception as e:
-                logger.warning("Failed to emit job.created event: %s", str(e))
+        # Emit job.created event outside the connection context so SQLite write lock is released
+        try:
+            broker = self.event_broker
+            if broker is None:
+                from .transformation.event_broker import event_broker as default_broker
+                broker = default_broker
+            broker.emit(
+                job_id=created.id,
+                event_type=TransformationEventType.JOB_CREATED,
+                payload={
+                    "project_id": created.project_id,
+                    "session_id": created.session_id,
+                    "requested_formats": [f.value for f in created.requested_formats],
+                    "source_count": len(created.source_ids),
+                },
+            )
+        except Exception as e:
+            logger.warning("Failed to emit job.created event: %s", str(e))
 
-            return created
+        return created
 
 
     def get_job(self, job_id: str) -> TransformationJob:
@@ -92,6 +94,7 @@ class JobService:
         project_id: Optional[str] = None,
         session_id: Optional[str] = None,
         state: Optional[JobState] = None,
+        user_id: Optional[str] = None,
     ) -> List[TransformationJob]:
         """List transformation jobs with optional filters, ordered by created_at DESC."""
         with get_connection(self.db_path) as conn:
@@ -100,6 +103,7 @@ class JobService:
                 project_id=project_id,
                 session_id=session_id,
                 state=state,
+                user_id=user_id,
             )
 
     def update_progress(
@@ -177,16 +181,35 @@ class JobService:
                     f"Cannot cancel job '{job_id}' in terminal state '{job.state.value}'"
                 )
 
+            # Check if active worker is executing this job
+            is_actively_running = False
+            try:
+                from .job_queue import job_queue_manager
+                is_actively_running = job_queue_manager.is_job_active(job_id)
+            except Exception:
+                pass
 
-            JobRepository.update_job_progress(
-                conn,
-                job_id=job_id,
-                state=JobState.CANCELLED,
-                progress=job.progress,
-                current_stage="Job cancelled by user",
-                error=None,
-            )
-            logger.info("Cancelled job '%s' from state '%s'", job_id, job.state.value)
+            if is_actively_running:
+                # Running by active worker: request cooperative cancellation and let worker halt cleanly at task boundary
+                JobRepository.request_cancellation(conn, job_id)
+                try:
+                    job_queue_manager.request_cancellation(job_id)
+                except Exception as ex:
+                    logger.debug("Could not signal in-memory queue manager: %s", ex)
+                logger.info("Requested cooperative cancellation for running job '%s'", job_id)
+            else:
+                # Queued or unmanaged processing job (e.g. tests or abandoned): transition directly to CANCELLED
+                JobRepository.update_job_progress(
+                    conn,
+                    job_id=job_id,
+                    state=JobState.CANCELLED,
+                    progress=job.progress,
+                    current_stage="Job cancelled by user",
+                    error=None,
+                    cancellation_requested=True,
+                )
+                logger.info("Cancelled non-running job '%s'", job_id)
+
             return JobRepository.get_job(conn, job_id)  # type: ignore[return-value]
 
     def save_canonical_content(self, canonical: CanonicalContent) -> CanonicalContent:

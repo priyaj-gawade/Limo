@@ -23,6 +23,7 @@ class ProjectService:
         name: str,
         description: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
     ) -> Project:
         """Create and persist a new project container."""
         clean_name = name.strip()
@@ -30,6 +31,7 @@ class ProjectService:
             raise ValueError("Project name cannot be empty")
 
         project = Project(
+            user_id=user_id,
             name=clean_name,
             description=description.strip() if description else None,
             metadata=metadata or {},
@@ -48,10 +50,10 @@ class ProjectService:
                 raise EntityNotFoundError("Project", project_id)
             return project
 
-    def list_projects(self) -> List[Project]:
+    def list_projects(self, user_id: Optional[str] = None) -> List[Project]:
         """List all projects ordered by last modification timestamp."""
         with get_connection(self.db_path) as conn:
-            return ProjectRepository.list_projects(conn)
+            return ProjectRepository.list_projects(conn, user_id=user_id)
 
     def update_project(
         self,

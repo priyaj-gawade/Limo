@@ -12,6 +12,7 @@ class Project(LimoBaseModel):
     """Container grouping ingested sources, chats, and transformed deliverables."""
 
     id: str = Field(default_factory=generate_project_id, description="Stable project ID with 'proj_' prefix")
+    user_id: Optional[str] = Field(default=None, description="Owning user ID if authenticated")
     name: str = Field(min_length=1, max_length=255, description="Human-readable project title")
     description: Optional[str] = Field(default=None, max_length=2000, description="Optional project summary or goal")
     created_at: datetime = Field(

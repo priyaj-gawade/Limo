@@ -137,16 +137,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
           )}
         </div>
         <div className="session-header-actions">
-          <button
-            className="header-action-btn"
-            onClick={() => {
-              navigator.clipboard.writeText(window.location.href);
-              showToast('Chat link copied to clipboard', 'success');
-            }}
-          >
-            <Share2 size={14} />
-            <span>Share</span>
-          </button>
+          {session.messages && session.messages.some((m) => m.role === 'user') && (
+            <button
+              className="header-action-btn"
+              onClick={() => {
+                navigator.clipboard.writeText(window.location.href);
+                showToast('Chat link copied to clipboard', 'success');
+              }}
+            >
+              <Share2 size={14} />
+              <span>Share</span>
+            </button>
+          )}
         </div>
       </div>
 

@@ -72,3 +72,11 @@ def generate_task_id() -> str:
 def generate_event_id() -> str:
     return generate_id("evt")
 
+
+def generate_user_id() -> str:
+    return generate_id("usr")
+
+
+# Backward compatibility alias
+generate_prefixed_id = generate_id
+

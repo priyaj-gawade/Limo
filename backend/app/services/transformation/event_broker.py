@@ -16,6 +16,8 @@ import re
 import threading
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Set
 
+from ...db.connection import get_connection
+from ...db.repositories.job_repo import JobRepository
 from ...models.transformation_events import (
     TransformationEventType,
     TransformationLifecycleEvent,
@@ -68,14 +70,19 @@ def sanitize_public_payload(data: Any) -> Any:
 
 
 class TransformationEventBroker:
-    """Manages ordered transformation lifecycle events with per-job sequence locks and replay."""
+    """Manages ordered transformation lifecycle events with SQLite persistence and race-free replay."""
 
-    def __init__(self, max_buffer_per_job: int = 200, max_events_per_job: Optional[int] = None):
+    def __init__(
+        self,
+        max_buffer_per_job: int = 200,
+        max_events_per_job: Optional[int] = None,
+        db_path: Optional[str] = None,
+    ):
         self._max_buffer = max_events_per_job if max_events_per_job is not None else max_buffer_per_job
+        self.db_path = db_path
         self._sequences: Dict[str, int] = {}
         self._history: Dict[str, List[TransformationLifecycleEvent]] = {}
         self._subscribers: Dict[str, List[Callable[[TransformationLifecycleEvent], Any]]] = {}
-        # Thread locks per job to ensure atomic sequence allocation under concurrency
         self._job_locks: Dict[str, threading.Lock] = {}
         self._meta_lock = threading.Lock()
 
@@ -91,7 +98,7 @@ class TransformationEventBroker:
         event_type: TransformationEventType,
         payload: Optional[Dict[str, Any]] = None,
     ) -> TransformationLifecycleEvent:
-        """Construct, sequence atomically, buffer, and dispatch a safe public event."""
+        """Construct, sequence atomically, persist to SQLite, buffer, and dispatch a safe public event."""
         job_lock = self._get_lock_for_job(job_id)
         with job_lock:
             current_seq = self._sequences.get(job_id, 0) + 1
@@ -108,7 +115,14 @@ class TransformationEventBroker:
                 payload=safe_payload,
             )
 
-            # Store in process-lifetime ring buffer
+            # 1. Durable persistence to SQLite job_events table
+            try:
+                with get_connection(self.db_path) as conn:
+                    JobRepository.save_job_event(conn, event)
+            except Exception as e:
+                logger.warning("Failed to persist event to SQLite for job %s: %s", job_id, str(e))
+
+            # 2. In-memory ring buffer for low-latency live operations
             if job_id not in self._history:
                 self._history[job_id] = []
             buf = self._history[job_id]
@@ -170,39 +184,50 @@ class TransformationEventBroker:
         job_id: str,
         after_sequence: int = 0,
     ) -> List[TransformationLifecycleEvent]:
-        """Return buffered historical events where sequence > after_sequence (process-lifetime only)."""
+        """Return historical events where sequence > after_sequence from SQLite and memory."""
+        db_events: List[TransformationLifecycleEvent] = []
+        try:
+            with get_connection(self.db_path) as conn:
+                db_events = JobRepository.get_job_events(conn, job_id, after_sequence=after_sequence)
+        except Exception as e:
+            logger.debug("SQLite event replay lookup failed for job %s: %s", job_id, e)
+
         job_lock = self._get_lock_for_job(job_id)
         with job_lock:
-            events = self._history.get(job_id, [])
-            return [e for e in events if e.sequence > after_sequence]
+            mem_events = [e for e in self._history.get(job_id, []) if e.sequence > after_sequence]
+
+        # Merge DB and memory events deduplicating by sequence
+        merged = {e.sequence: e for e in mem_events}
+        for e in db_events:
+            merged[e.sequence] = e
+        return [merged[s] for s in sorted(merged.keys())]
 
     async def stream_job_events(
         self,
         job_id: str,
         after_sequence: int = 0,
         poll_timeout: Optional[float] = None,
+        heartbeat_interval: float = 15.0,
     ) -> AsyncGenerator[str, None]:
-        """Yield Server-Sent Events (SSE) text frames for a job.
-        
-        1. First replays missed historical events (sequence > after_sequence).
-        2. Then yields live events in real-time as they are emitted until terminal event.
-        """
+        """Yield Server-Sent Events (SSE) text frames with race-free reconnect and keepalive pings."""
         queue: asyncio.Queue[TransformationLifecycleEvent] = asyncio.Queue()
 
         def on_event(evt: TransformationLifecycleEvent):
             queue.put_nowait(evt)
 
+        # 1. Subscribe to live queue FIRST before querying DB to eliminate race window
         self.subscribe(job_id, on_event)
 
         try:
-            # 1. Replay missed events
+            # 2. Replay missed historical events from authoritative SQLite store
             replayed = self.replay(job_id, after_sequence=after_sequence)
             last_yielded_seq = after_sequence
             for evt in replayed:
                 yield evt.to_sse_frame()
-                last_yielded_seq = evt.sequence
+                if evt.sequence > last_yielded_seq:
+                    last_yielded_seq = evt.sequence
 
-            # 2. Stream live events
+            # 3. Stream live events
             terminal_types = {
                 TransformationEventType.JOB_COMPLETED,
                 TransformationEventType.JOB_FAILED,
@@ -211,15 +236,19 @@ class TransformationEventBroker:
                 TransformationEventType.JOB_PARTIALLY_COMPLETED,
             }
 
+            idle_wait = heartbeat_interval if poll_timeout is None else poll_timeout
+
             while True:
                 try:
-                    if poll_timeout is not None:
-                        live_evt = await asyncio.wait_for(queue.get(), timeout=poll_timeout)
-                    else:
-                        live_evt = await queue.get()
+                    live_evt = await asyncio.wait_for(queue.get(), timeout=idle_wait)
                 except asyncio.TimeoutError:
-                    break
+                    if poll_timeout is not None:
+                        break
+                    # Emit standard SSE keepalive comment frame to prevent proxy drop
+                    yield ": keepalive\n\n"
+                    continue
 
+                # Deduplicate: Discard any events that were already replayed from DB
                 if live_evt.sequence > last_yielded_seq:
                     yield live_evt.to_sse_frame()
                     last_yielded_seq = live_evt.sequence
