@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { marked, Tokens } from 'marked';
-import { Copy, Check } from 'lucide-react';
+import { Copy, Check, ExternalLink, Play } from 'lucide-react';
 import { useToast } from '../context/ToastContext';
 
 interface MarkdownMessageProps {
@@ -87,7 +87,8 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, class
             {token.text}
           </code>
         );
-      case 'link':
+      case 'link': {
+        const isYouTube = Boolean(token.href && (token.href.includes('youtube.com') || token.href.includes('youtu.be')));
         return (
           <a
             key={key}
@@ -95,11 +96,23 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, class
             title={token.title || undefined}
             target="_blank"
             rel="noopener noreferrer"
-            className="md-link"
+            className={`md-link ${isYouTube ? 'md-youtube-link' : ''}`}
           >
+            {isYouTube && (
+              <Play
+                size={11}
+                className="inline-play-icon"
+                style={{ display: 'inline', marginRight: '4px', verticalAlign: '-1px', fill: 'currentColor' }}
+              />
+            )}
             {token.tokens ? token.tokens.map(renderInlineToken) : token.text}
+            <ExternalLink
+              size={11}
+              style={{ display: 'inline', marginLeft: '3px', verticalAlign: '-1px', opacity: 0.65 }}
+            />
           </a>
         );
+      }
       case 'del':
         return (
           <del key={key} className="md-del">

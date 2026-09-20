@@ -37,6 +37,9 @@ class UserGoal(StrEnum):
     CREATE_DELIVERABLE = "CREATE_DELIVERABLE"
     CONVERT_DELIVERABLE = "CONVERT_DELIVERABLE"
     EDIT_DELIVERABLE = "EDIT_DELIVERABLE"
+    SEARCH_WEB = "SEARCH_WEB"
+    SEARCH_YOUTUBE = "SEARCH_YOUTUBE"
+    RESEARCH = "RESEARCH"
     AMBIGUOUS = "AMBIGUOUS"
 
 
@@ -88,6 +91,14 @@ class ResolutionResult(BaseModel):
     source_reference: Optional[str] = Field(default=None, description="Extracted input source phrase for transforms")
     ambiguous_options: List[TargetFormat] = Field(default_factory=list, description="Contending formats if ambiguous")
     clarification_prompt: Optional[str] = Field(default=None, description="Conversational prompt to present to user")
+    needs_web_search: bool = Field(default=False, description="Whether turn requires live web search")
+    needs_youtube: bool = Field(default=False, description="Whether turn requires YouTube video lookup")
+    needs_url_scrape: bool = Field(default=False, description="Whether turn requires remote URL/article scraping")
+    uses_pasted_source: bool = Field(default=False, description="Whether prompt contains substantial pasted content bypassing web search")
+    needs_current_information: bool = Field(default=False, description="Whether request demands current/real-time factual verification")
+    target_url: Optional[str] = Field(default=None, description="Primary extracted web/article URL to scrape")
+    target_urls: List[str] = Field(default_factory=list, description="All extracted web/article URLs to scrape")
+    web_query: Optional[str] = Field(default=None, description="Extracted search or research query")
 
     @property
     def intent(self) -> ResponseType:
@@ -132,15 +143,194 @@ class IntentResolver:
             if any(k in last_p for k in ["summarize", "summarise", "summerise", "explain", "analyze", "what does this say", "what do you think"]):
                 return paragraphs[-1], "\n\n".join(paragraphs[:-1])
 
-        # If long single block without explicit punctuation separator, look for first sentence
-        if len(raw) > 250:
-            parts = re.split(r"(?<=[.!?\n])\s+", raw, maxsplit=1)
-            if len(parts) > 1:
-                return parts[0].strip(), parts[1].strip()
-
         return raw, ""
 
+    @classmethod
+    def _is_pasted_source(cls, prompt: str, directive: str, body: str) -> bool:
+        """Classify whether the prompt actually contains supplied source material.
+
+        Does NOT rely solely on raw character count. Requires strong evidence of
+        supplied content, such as:
+        1. Quoted or fenced blocks (triple quotes, markdown blocks, blockquotes, large quotes).
+        2. Explicit source framing ("here is the article", "below is the document",
+           "summarize the following", "use this content", "analyze this text").
+        3. A clearly delimited substantive body following a source directive.
+        """
+        clean_prompt = prompt.strip()
+        clean_body = body.strip()
+
+        # If there's an explicit URL in the prompt, that is a URL scrape target, not pasted source
+        if re.search(r"https?://[^\s)\]>\"']+", clean_prompt):
+            return False
+
+        # 1. Quoted or fenced source blocks
+        # Triple quotes or markdown code blocks containing substantive text (>= 50 chars)
+        if re.search(r'("""[\s\S]{50,}?"""|\'\'\'[\s\S]{50,}?\'\'\'|```[\s\S]{50,}?```)', clean_prompt):
+            return True
+
+        # Markdown blockquotes (lines starting with >)
+        if re.search(r'(?:^|\n)>\s+.{50,}', clean_prompt, re.DOTALL):
+            return True
+
+        # Quoted text in double quotes after a colon or newline
+        if re.search(r'(?::|\n+)\s*"([^"]{60,})"', clean_prompt):
+            return True
+
+        # 2. Explicit source framing phrases anywhere in prompt or directive
+        source_framing_pattern = re.compile(
+            r"\b(?:"
+            r"(?:here\s+(?:is|are)|below\s+(?:is|are)|following\s+is|here's)\s+(?:the\s+|an?\s+)?(?:article|document|text|content|post|excerpt|paper|notes|transcript|speech|story|data)"
+            r"|(?:summarize|analyse|analyze|explain|translate|rewrite|extract\s+from|read|evaluate)\s+(?:the\s+following|this\s+text|this\s+article|this\s+document|this\s+content|this\s+post|below)"
+            r"|(?:use|based\s+on)\s+(?:this|the\s+following)\s+(?:content|text|article|document|source|information)"
+            r"|(?:article|document|content|text|transcript|source|excerpt)\s*:\s*\n+"
+            r")\b",
+            re.IGNORECASE,
+        )
+        has_explicit_framing = bool(source_framing_pattern.search(directive) or source_framing_pattern.search(clean_prompt[:250]))
+
+        # If explicit framing is present and there is substantive following body
+        if has_explicit_framing and clean_body and len(clean_body) >= 60:
+            return True
+
+        # 3. Delimited body after a source-processing directive
+        source_directive_pattern = re.compile(
+            r"\b(?:summarize|summarise|summerise|analyze|analyse|explain|translate|rewrite|extract|what\s+does\s+this\s+say|what\s+this\s+says)\b"
+            r".*?\b(?:article|document|text|post|excerpt|paper|content|transcript|notes|following|below|this)\b",
+            re.IGNORECASE,
+        )
+        if clean_body and len(clean_body) >= 100:
+            if source_directive_pattern.search(directive):
+                return True
+
+        # 4. Multi-paragraph prose following a clear colon separator after a directive
+        if (":" in directive or clean_prompt.startswith(directive + ":")) and clean_body:
+            paragraphs = [p.strip() for p in clean_body.split("\n\n") if p.strip()]
+            if len(paragraphs) >= 2 and len(clean_body) >= 200:
+                # Must not look like a bullet list of user questions or user instructions
+                if not re.match(r"^(?:\d+[\.)]|\-|\*)\s+", clean_body):
+                    return True
+
+        return False
+
     def resolve(
+        self,
+        prompt: str,
+        active_mode: Optional[Union[FeatureMode, str]] = None,
+    ) -> ResolutionResult:
+        res = self._resolve_internal(prompt, active_mode)
+
+        # Web Reach Decision Policy (Phase D8.9)
+        # Precedence hierarchy:
+        # 1. Pasted Content Bypass (with "verify current claims" exception)
+        # 2. Direct URL Content Extraction
+        # 3. YouTube Video / Transcript Discovery
+        # 4. Current / Temporal Information Needs
+        # 5. General Knowledge Queries
+        # 6. Normal Conversational Chat
+
+        # Extract all URLs
+        raw_urls = re.findall(r"https?://[^\s)\]>\"']+", prompt)
+        clean_urls = [u.rstrip(".,;)\"'>]") for u in raw_urls if u.rstrip(".,;)\"'>]")]
+
+        youtube_urls = [
+            u for u in clean_urls
+            if any(h in u.lower() for h in ("youtube.com/watch", "youtu.be/", "youtube.com/shorts", "youtube.com/channel"))
+        ]
+        web_urls = [u for u in clean_urls if u not in youtube_urls]
+
+        directive, body = self._extract_directive_and_body(prompt)
+        is_pasted_article = self._is_pasted_source(prompt, directive, body)
+
+        # Check for explicit verification exception on pasted article
+        has_verify_current = bool(
+            re.search(
+                r"\b(?:verify|check|fact-?check|validate|confirm|is\s+this\s+still|are\s+these\s+still)\b.*\b(?:current|today|now|recent|latest|true\s+today|still\s+accurate)\b",
+                prompt,
+                re.I,
+            )
+        )
+
+        clean_search_query = re.sub(
+            r"^(?:please\s+)?(?:create|make|generate|produce|build|draft|write|export|convert|transform|turn)?\s*(?:an?\s+)?(?:one-page\s+|2-slide\s+|small\s+|short\s+|8-second\s+|15-second\s+|\d+:\d+\s+)?(?:markdown\s+|md\s+|docx?\s+|slides?\s+|presentation\s+|spreadsheet\s+|sheets?\s+|xlsx\s+|pdf\s+|infographics?|posters?|images?|videos?|documents?|memo\s+pdf)?\s*(?:on|about|for|of|into|to|from|:)?\s*",
+            "",
+            prompt,
+            flags=re.IGNORECASE,
+        ).strip()
+        clean_search_query = re.sub(
+            r"^(?:please\s+)?(?:search(?:\s+the)?\s+(?:web|internet|google)(?:\s+for)?|look\s+up\s+online(?:\s+for)?|browse\s+the\s+web\s+for|what\s+is\s+the\s+latest|what\s+are\s+the\s+latest|tell\s+me\s+about\s+the\s+latest|summarize\s+(?:the\s+latest\s+)?|find\s+out\s+(?:about\s+)?)\s*",
+            "",
+            clean_search_query,
+            flags=re.IGNORECASE,
+        ).strip().rstrip(".!?")
+        if not clean_search_query:
+            clean_search_query = prompt
+
+        clean_yt_query = re.sub(
+            r"^(?:please\s+)?(?:find|search(?:\s+for)?|get|show\s+me|look\s+up|what\s+are)\s+(?:some\s+)?(?:youtube\s+)?(?:videos?|clips?)(?:\s+on\s+youtube)?(?:\s+(?:about|on|for|explaining|covering|that\s+explain|that\s+cover))?\s*",
+            "",
+            prompt,
+            flags=re.IGNORECASE,
+        ).strip().rstrip(".!?")
+        if not clean_yt_query:
+            clean_yt_query = prompt
+
+        is_explicit_web_search = bool(
+            re.search(
+                r"\b(?:search(?:\s+the)?\s+(?:web|internet|google)|look\s+up\s+online|browse\s+the\s+web)\b",
+                prompt,
+                re.I,
+            )
+        )
+        is_temporal = bool(
+            re.search(
+                r"\b(?:latest|recent|today's|breaking\s+news|current\s+(?:events?|price|status|developments|news|market)|news\s+(?:about|on|today)|developments\s+in|who\s+won|stock\s+price|weather\s+in|what\s+happened\s+(?:today|recently)|happening\s+today)\b",
+                prompt,
+                re.I,
+            )
+        )
+        is_yt = bool(
+            youtube_urls or re.search(r"\b(?:youtube|videos?\s+on\s+youtube|youtube\s+videos?|youtube\s+channel)\b", prompt, re.I)
+        )
+
+        # Tier 1: Pasted Content Bypass
+        if is_pasted_article:
+            res.uses_pasted_source = True
+            if has_verify_current:
+                res.needs_current_information = True
+                res.needs_web_search = True
+                res.web_query = clean_search_query
+            else:
+                # Pasted article bypass: strictly zero external browsing
+                res.needs_web_search = False
+                res.needs_url_scrape = False
+                res.needs_youtube = False
+                return res
+
+        # Tier 2: Direct URL Content Extraction
+        if web_urls:
+            res.needs_url_scrape = True
+            res.target_url = web_urls[0]
+            res.target_urls = web_urls
+
+        # Tier 3: YouTube Video / Transcript Discovery
+        if is_yt:
+            res.needs_youtube = True
+            if youtube_urls:
+                res.target_url = youtube_urls[0]
+                res.target_urls = youtube_urls
+            elif not res.web_query:
+                res.web_query = clean_yt_query
+
+        # Tier 4: Current / Temporal Information Needs
+        if (is_explicit_web_search or is_temporal) and not res.needs_url_scrape and not is_pasted_article:
+            res.needs_web_search = True
+            res.needs_current_information = True
+            if not res.web_query:
+                res.web_query = clean_search_query
+
+        return res
+
+    def _resolve_internal(
         self,
         prompt: str,
         active_mode: Optional[Union[FeatureMode, str]] = None,
@@ -166,6 +356,88 @@ class IntentResolver:
         mode_str = "none"
         if active_mode:
             mode_str = active_mode.value if hasattr(active_mode, "value") else str(active_mode).lower().strip()
+
+        # -------------------------------------------------------------------
+        # Pre-Analysis: Web Reach & External Access Signals (Phase D8.9)
+        # -------------------------------------------------------------------
+        url_match = re.search(r"https?://[^\s)\]>\"']+", prompt)
+        found_url = url_match.group(0).rstrip(".,;") if url_match else None
+
+        is_yt = bool(re.search(r"\b(?:youtube|videos?\s+on\s+youtube|youtube\s+videos?|youtube\s+channel)\b", prompt, re.I))
+
+        # Pasted article bypass: substantive text provided directly in prompt
+        is_pasted_article = self._is_pasted_source(prompt, directive, body)
+
+        is_explicit_web_search = bool(
+            re.search(
+                r"\b(?:search(?:\s+the)?\s+(?:web|internet|google)|look\s+up\s+online|browse\s+the\s+web)\b",
+                prompt,
+                re.I,
+            )
+        )
+        is_temporal = bool(
+            re.search(
+                r"\b(?:latest|recent|today's|breaking\s+news|current\s+(?:events?|price|status|developments|news|market)|news\s+(?:about|on|today)|developments\s+in|who\s+won|stock\s+price|weather\s+in|what\s+happened\s+(?:today|recently)|happening\s+today)\b",
+                prompt,
+                re.I,
+            )
+        )
+        needs_search = (is_explicit_web_search or is_temporal) and not is_pasted_article
+
+        clean_search_query = re.sub(
+            r"^(?:please\s+)?(?:search(?:\s+the)?\s+(?:web|internet|google)(?:\s+for)?|look\s+up\s+online(?:\s+for)?|browse\s+the\s+web\s+for|what\s+is\s+the\s+latest|what\s+are\s+the\s+latest|tell\s+me\s+about\s+the\s+latest|summarize\s+(?:the\s+latest\s+)?|find\s+out\s+(?:about\s+)?)\s*",
+            "",
+            prompt,
+            flags=re.IGNORECASE,
+        ).strip().rstrip(".!?")
+        if not clean_search_query:
+            clean_search_query = prompt
+
+        clean_yt_query = re.sub(
+            r"^(?:please\s+)?(?:find|search(?:\s+for)?|get|show\s+me|look\s+up|what\s+are)\s+(?:some\s+)?(?:youtube\s+)?(?:videos?|clips?)(?:\s+on\s+youtube)?(?:\s+(?:about|on|for|explaining|covering|that\s+explain|that\s+cover))?\s*",
+            "",
+            prompt,
+            flags=re.IGNORECASE,
+        ).strip().rstrip(".!?")
+        if not clean_yt_query:
+            clean_yt_query = prompt
+
+        has_deliverable_command = bool(
+            re.search(
+                r"\b(?:create|make|generate|produce|build|draft|write|export|convert|transform|turn)\s+(?:a\s+|an\s+)?(?:one-page\s+|2-slide\s+|small\s+|short\s+|8-second\s+|15-second\s+|\d+:\d+\s+)?(?:markdown\s+|md\s+|docx?\s+|slides?\s+|presentation\s+|spreadsheet\s+|sheets?\s+|xlsx\s+|pdf\s+|infographics?|posters?|images?|videos?)\b",
+                d_lower,
+            )
+        ) or mode_str in ("docs", "slides", "sheets", "video", "audio", "infographic", "poster", "image")
+
+        # Pure Conversational Web Reach Turns (No Deliverable Command)
+        if not has_deliverable_command:
+            if is_yt:
+                return ResolutionResult(
+                    response_type=ResponseType.CHAT_RESPONSE,
+                    user_goal=UserGoal.SEARCH_YOUTUBE,
+                    confidence=ConfidenceLevel.HIGH,
+                    reason="YouTube video search requested",
+                    needs_youtube=True,
+                    web_query=clean_yt_query,
+                )
+            if found_url and not is_pasted_article:
+                return ResolutionResult(
+                    response_type=ResponseType.CHAT_RESPONSE,
+                    user_goal=UserGoal.SUMMARIZE,
+                    confidence=ConfidenceLevel.HIGH,
+                    reason=f"Article URL reading requested for {found_url}",
+                    needs_url_scrape=True,
+                    target_url=found_url,
+                )
+            if needs_search:
+                return ResolutionResult(
+                    response_type=ResponseType.CHAT_RESPONSE,
+                    user_goal=UserGoal.SEARCH_WEB,
+                    confidence=ConfidenceLevel.HIGH,
+                    reason="Web search requested for live/current information",
+                    needs_web_search=True,
+                    web_query=clean_search_query,
+                )
 
         # -------------------------------------------------------------------
         # Rule 0: Edit / Open Deliverable Requests

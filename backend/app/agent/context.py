@@ -17,6 +17,7 @@ from ..models.content import CanonicalContent
 from ..models.enums import FeatureMode, MessageRole
 from ..models.project import Source
 from ..services.extraction.models import ExtractedDocument
+from ..services.web.models import WebSourceProvenance, YouTubeVideoResult
 from .contracts import ToolResult
 
 
@@ -63,6 +64,8 @@ class UnifiedInputContext(BaseModel):
     extracted_documents: List[ExtractedDocument] = Field(default_factory=list, description="D5 extracted documents")
     canonical_contents: List[CanonicalContent] = Field(default_factory=list, description="D5 canonical content objects")
     media_references: List[MediaReference] = Field(default_factory=list, description="Preserved native media references")
+    web_sources: List[WebSourceProvenance] = Field(default_factory=list, description="Grounded web source provenance")
+    youtube_results: List[YouTubeVideoResult] = Field(default_factory=list, description="Discovered YouTube videos")
     resolved_intent: Optional[Dict[str, Any]] = Field(default=None, description="Intent gate resolution")
 
 
@@ -146,6 +149,18 @@ class ContextSelector:
                 ],
             }
 
+        # 4. Web Sources and YouTube Grounding Selection
+        if unified_input.web_sources:
+            prompt_lines.append("\n### Grounded Web Sources:")
+            for ws in unified_input.web_sources[:5]:
+                prov_tag = f" (via {ws.scrape_provider})" if ws.scrape_provider else ""
+                prompt_lines.append(f"- [{ws.title}]({ws.url}) — {ws.domain}{prov_tag}")
+
+        if unified_input.youtube_results:
+            prompt_lines.append("\n### Discovered YouTube Resources:")
+            for yt in unified_input.youtube_results[:4]:
+                prompt_lines.append(f"- [{yt.title}]({yt.url}) — {yt.channel}")
+
         selected.prompt_context_snippet = "\n".join(prompt_lines).strip()
         return selected
 
@@ -169,6 +184,7 @@ class AgentContext(BaseModel):
     start_time: float = Field(default_factory=time.time, description="Monotonic start timestamp")
     retrieval_budget_tokens: int = Field(default_factory=lambda: getattr(settings, "default_retrieval_token_budget", 2000), description="Context retrieval token budget")
     unified_input: Optional[UnifiedInputContext] = Field(default=None, description="Preserved unified input context for current turn")
+    prompt_context_snippet: str = Field(default="", description="Serialized prompt context snippet from ContextSelector")
 
     def is_timed_out(self) -> bool:
         """Check if execution time has breached max_execution_time_sec."""

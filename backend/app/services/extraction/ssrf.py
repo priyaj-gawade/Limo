@@ -205,9 +205,16 @@ async def fetch_url_ssrf_safe(
                 await response.aclose()
 
             # Return a materialized response with the safely accumulated bytes
+            # Strip content-encoding since aiter_bytes() already decompresses the stream
+            resp_headers = {
+                k: v for k, v in response.headers.items()
+                if k.lower() not in ("content-encoding", "content-length")
+            }
+            resp_headers["content-length"] = str(len(accumulated))
+
             return httpx.Response(
                 status_code=200,
-                headers=response.headers,
+                headers=resp_headers,
                 content=bytes(accumulated),
                 request=request,
             )

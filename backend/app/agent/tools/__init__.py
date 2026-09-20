@@ -8,6 +8,12 @@ from .transform_tool import TransformContractTool
 from .job_tool import JobTool
 from .artifact_tool import ArtifactTool
 from .storage_tool import StorageTool
+from .web_tools import (
+    ResearchWebSourcesTool,
+    ScrapeUrlTool,
+    WebSearchTool,
+    YouTubeSearchTool,
+)
 
 
 def create_default_tool_registry() -> ToolRegistry:
@@ -21,6 +27,10 @@ def create_default_tool_registry() -> ToolRegistry:
     registry.register(JobTool())
     registry.register(ArtifactTool())
     registry.register(StorageTool())
+    registry.register(WebSearchTool())
+    registry.register(YouTubeSearchTool())
+    registry.register(ScrapeUrlTool())
+    registry.register(ResearchWebSourcesTool())
     return registry
 
 
@@ -34,5 +44,9 @@ __all__ = [
     "JobTool",
     "ArtifactTool",
     "StorageTool",
+    "WebSearchTool",
+    "YouTubeSearchTool",
+    "ScrapeUrlTool",
+    "ResearchWebSourcesTool",
     "create_default_tool_registry",
 ]

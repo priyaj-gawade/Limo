@@ -78,9 +78,11 @@ class LLMReasoningEngine(ReasoningEngine):
                 status = "SUCCESS" if obs.result.success else "FAILED"
                 parts.append(f"Tool [{obs.tool_name}] -> {status}: {obs.result.output}")
 
-        # Selected attached inputs or source excerpts
+        # Selected attached inputs, web sources, or source excerpts
         if selected_context and selected_context.prompt_context_snippet:
             parts.append(f"\n{selected_context.prompt_context_snippet}")
+        elif getattr(context, "prompt_context_snippet", None):
+            parts.append(f"\n{context.prompt_context_snippet}")
         elif context.source_excerpts:
             parts.append("\n### Relevant Source Context:")
             for exc in context.source_excerpts[:3]:

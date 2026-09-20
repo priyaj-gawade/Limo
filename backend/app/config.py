@@ -1,7 +1,12 @@
 from pathlib import Path
 from typing import Any, List, Optional, Union
+import dotenv
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Ensure .env is loaded into os.environ regardless of working directory
+dotenv.load_dotenv()
+dotenv.load_dotenv("../.env")
 
 
 class Settings(BaseSettings):
@@ -33,6 +38,14 @@ class Settings(BaseSettings):
     llm_timeout_sec: float = 30.0
     llm_safety_margin: float = 0.9
     default_retrieval_token_budget: int = 2000
+
+    # Web & Internet Reach Configuration (Phase D8.9)
+    web_search_provider: str = "ddgs"
+    google_search_api_key: Optional[str] = None
+    google_csx_id: Optional[str] = None
+    youtube_api_key: Optional[str] = None
+    # Direct Content Extraction (Trafilatura + Crawl4AI fallback)
+    web_crawl_timeout_sec: int = 15
 
     # TTS & Voice Layer Configuration (Phase D8.3)
     default_tts_provider: str = "azure"

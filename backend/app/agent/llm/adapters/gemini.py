@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
@@ -27,13 +27,19 @@ class GeminiAdapter(BaseProviderAdapter):
     provider_name = "gemini"
 
     def __init__(self):
-        self._clients: Dict[str, genai.Client] = {}
+        self._clients: Dict[Tuple[str, int], genai.Client] = {}
 
     def _get_client(self, api_key: str) -> genai.Client:
-        """Cache client instance per API key."""
-        if api_key not in self._clients:
-            self._clients[api_key] = genai.Client(api_key=api_key)
-        return self._clients[api_key]
+        """Cache client instance per (API key, event loop) so async sessions are never shared across event loops."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop_id = id(loop)
+        except RuntimeError:
+            loop_id = 0
+        cache_key = (api_key, loop_id)
+        if cache_key not in self._clients:
+            self._clients[cache_key] = genai.Client(api_key=api_key)
+        return self._clients[cache_key]
 
     async def generate(
         self,
@@ -61,7 +67,15 @@ class GeminiAdapter(BaseProviderAdapter):
             config_kwargs["system_instruction"] = system_instruction
 
         if tools_declarations:
-            config_kwargs["tools"] = [{"function_declarations": tools_declarations}]
+            if (
+                isinstance(tools_declarations, list)
+                and tools_declarations
+                and isinstance(tools_declarations[0], dict)
+                and ("functionDeclarations" in tools_declarations[0] or "function_declarations" in tools_declarations[0])
+            ):
+                config_kwargs["tools"] = tools_declarations
+            else:
+                config_kwargs["tools"] = [{"function_declarations": tools_declarations}]
 
         if response_mime_type:
             config_kwargs["response_mime_type"] = response_mime_type

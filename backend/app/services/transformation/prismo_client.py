@@ -130,7 +130,7 @@ class _LLMBridgeHandler(BaseHTTPRequestHandler):
             loop.close()
 
         function_calls_payload = [
-            {"name": fc.name, "args": fc.arguments}
+            {"name": fc.name, "args": getattr(fc, "args", getattr(fc, "arguments", {}))}
             for fc in getattr(res, "function_calls", [])
         ]
 
