@@ -34,25 +34,50 @@ class GitHubActionsDispatcher:
     def pat(self) -> str:
         if self._pat is not None:
             return self._pat.strip()
-        return os.getenv("GITHUB_PAT", "").strip()
+        # Read from both os.getenv AND settings (pydantic-settings) as belt-and-suspenders
+        from ...config import settings
+        raw = os.getenv("GITHUB_PAT", "").strip()
+        if raw:
+            return raw
+        return (settings.github_pat or "").strip()
 
     @property
     def repo(self) -> str:
         if self._repo is not None:
             return self._repo.strip()
-        return os.getenv("GITHUB_REPO", "priyaj-gawade/Limo").strip()
+        from ...config import settings
+        raw = os.getenv("GITHUB_REPO", "").strip()
+        if raw:
+            return raw
+        return (settings.github_repo or "priyaj-gawade/Limo").strip()
 
     @property
     def backend_url(self) -> str:
+        from ...config import settings
         return (
             self._backend_url
             or os.getenv("PUBLIC_BACKEND_URL", "")
+            or (settings.public_backend_url if settings.public_backend_url else "")
             or "https://api.limo-ai.online"
         ).rstrip("/")
 
     def is_configured(self) -> bool:
         """Check if GitHub Actions dispatcher has required credentials."""
-        return bool(self.pat and self.repo)
+        has_pat = bool(self.pat)
+        has_repo = bool(self.repo)
+        if not has_pat or not has_repo:
+            from ...config import settings
+            logger.warning(
+                "GitHub Actions dispatcher NOT configured: has_pat=%s, has_repo=%s, "
+                "os.getenv('GITHUB_PAT')=%s, settings.github_pat=%s",
+                has_pat,
+                has_repo,
+                "SET" if os.getenv("GITHUB_PAT") else "EMPTY",
+                "SET" if settings.github_pat else "EMPTY",
+            )
+        else:
+            logger.info("GitHub Actions dispatcher configured: repo=%s, pat=***%s", self.repo, self.pat[-4:] if len(self.pat) > 4 else "****")
+        return has_pat and has_repo
 
     def dispatch_render_job(
         self,

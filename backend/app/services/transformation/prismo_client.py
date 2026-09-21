@@ -374,6 +374,25 @@ class PrismoClient:
             if progress_callback:
                 progress_callback("design_synthesis", "Designing visual composition")
 
+            # Auto-detect Playwright Chromium for CHROME_BIN if not already set
+            proc_env = dict(os.environ)
+            if not proc_env.get("CHROME_BIN"):
+                pw_chromium_candidates = [
+                    # Playwright's default cache on Linux (Render)
+                    Path.home() / ".cache" / "ms-playwright",
+                    # Alternative path
+                    Path("/opt/render/.cache/ms-playwright"),
+                ]
+                for pw_root in pw_chromium_candidates:
+                    if pw_root.is_dir():
+                        for chrome_path in sorted(pw_root.glob("chromium-*/chrome-linux/chrome"), reverse=True):
+                            if chrome_path.is_file():
+                                proc_env["CHROME_BIN"] = str(chrome_path)
+                                logger.info("Auto-detected Playwright Chromium for CHROME_BIN: %s", chrome_path)
+                                break
+                    if proc_env.get("CHROME_BIN"):
+                        break
+
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -382,6 +401,7 @@ class PrismoClient:
                 cwd=str(self.runner_path.parent.parent),  # external/Prismo
                 encoding="utf-8",
                 errors="replace",
+                env=proc_env,
             )
 
             # Stream stderr asynchronously for progress mapping
