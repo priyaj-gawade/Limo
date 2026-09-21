@@ -29,6 +29,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging()
     logger.info("Initializing %s v%s (environment: %s)", settings.app_name, settings.app_version, settings.environment)
 
+    # Enforce security policies for current surface
+    settings.validate_worker_security()
+
     # Initialize sandboxed filesystem boundaries and SQLite database
     storage_service.ensure_directories()
     init_db()

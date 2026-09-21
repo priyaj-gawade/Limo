@@ -266,7 +266,7 @@ async def stream_artifact(
     if is_worker_artifact_ref(artifact.storage_ref):
         worker_art_id = parse_worker_artifact_id(artifact.storage_ref)
         worker_base = os.getenv("TURBO_WORKER_URL") or "http://localhost:8005"
-        worker_token = os.getenv("WORKER_AUTH_TOKEN") or "limo-turbo-worker-secret-key-12345"
+        worker_token = (os.getenv("WORKER_AUTH_TOKEN") or settings.resolved_worker_token or "").strip()
 
         worker_url = f"{worker_base.rstrip('/')}/artifacts/{worker_art_id}"
         req_headers = {"X-Limo-Worker-Key": worker_token}

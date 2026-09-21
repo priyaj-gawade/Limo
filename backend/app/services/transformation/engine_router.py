@@ -341,7 +341,7 @@ class EngineRouter:
         from ...exceptions import BadRequestError
 
         worker_url = os.getenv("TURBO_WORKER_URL", "http://localhost:8005").rstrip("/")
-        worker_token = os.getenv("WORKER_AUTH_TOKEN", "limo-turbo-worker-secret-key-12345")
+        worker_token = (os.getenv("WORKER_AUTH_TOKEN") or settings.resolved_worker_token or "").strip()
 
         resolved_job_id = job_id or f"job_{uuid.uuid4().hex[:12]}"
         artifact_id = f"art_{uuid.uuid4().hex[:16]}"

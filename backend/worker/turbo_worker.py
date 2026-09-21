@@ -33,8 +33,10 @@ app = FastAPI(title="Limo Turbo Worker", version="1.0.0")
 def get_worker_token() -> str:
     token = os.getenv("WORKER_AUTH_TOKEN", "").strip()
     if not token:
-        # Fallback for local testing if not set
-        token = "limo-turbo-worker-secret-key-12345"
+        if os.getenv("LIMO_SURFACE", "desktop").lower() == "web":
+            raise RuntimeError("WORKER_AUTH_TOKEN is mandatory in web mode. Failing closed.")
+        # Local desktop testing fallback only
+        token = "local-dev-worker-token"
     return token
 
 

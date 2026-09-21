@@ -51,11 +51,16 @@ class JobCallbackPayload(BaseModel):
 
 
 def _verify_worker_access(worker_key: Optional[str]) -> bool:
-    """Verify worker authentication token."""
-    expected_token = (settings.worker_token or "limo-turbo-worker-secret-key-12345").strip()
-    if not worker_key or worker_key.strip() != expected_token:
+    """Verify worker authentication token using constant-time comparison. Fail closed."""
+    import hmac
+    expected_token = (settings.resolved_worker_token or "").strip()
+    if not expected_token:
+        if settings.limo_surface.lower() == "web":
+            logger.error("WORKER_AUTH_TOKEN is not configured on web surface - failing closed")
         return False
-    return True
+    if not worker_key or not worker_key.strip():
+        return False
+    return hmac.compare_digest(worker_key.strip(), expected_token)
 
 
 @router.get("", response_model=List[TransformationJob])
@@ -220,12 +225,67 @@ async def worker_job_callback(
     cb_status = (payload.status or "completed").lower()
 
     logger.info(
-        "Received worker callback for job %s: status=%s, exec_id=%s, run_id=%s",
+        "Received worker callback for job %s: status=%s, exec_id=%s, run_id=%s, attempt=%s",
         job_id,
         cb_status,
         payload.execution_id,
         payload.github_run_id,
+        payload.attempt,
     )
+
+    # 1. Stale execution validation gate
+    active_exec_id = getattr(job, "execution_id", None)
+    if active_exec_id and payload.execution_id and payload.execution_id != active_exec_id:
+        logger.warning(
+            "Rejecting stale execution callback for job %s: active execution is '%s', received '%s'",
+            job_id,
+            active_exec_id,
+            payload.execution_id,
+        )
+        return {
+            "status": "ignored",
+            "reason": "stale_execution_id",
+            "active_execution_id": active_exec_id,
+            "received_execution_id": payload.execution_id,
+        }
+
+    # 2. Outdated attempt validation gate
+    current_attempt = 1
+    if job.configuration and isinstance(job.configuration.format_overrides, dict):
+        current_attempt = job.configuration.format_overrides.get("attempt", 1)
+    if payload.attempt and payload.attempt < current_attempt:
+        logger.warning(
+            "Rejecting stale attempt callback for job %s: current attempt is %d, received %d",
+            job_id,
+            current_attempt,
+            payload.attempt,
+        )
+        return {
+            "status": "ignored",
+            "reason": "stale_attempt",
+            "current_attempt": current_attempt,
+            "received_attempt": payload.attempt,
+        }
+
+    # 3. Terminal state protection: prevent resurrection of cancelled or failed jobs
+    if job.state == JobState.CANCELLED:
+        logger.info("Ignoring callback for already cancelled job %s", job_id)
+        return {"status": "ignored", "reason": "job_already_cancelled", "job_id": job_id}
+
+    if job.state == JobState.FAILED:
+        logger.info("Ignoring callback for already failed job %s", job_id)
+        return {"status": "ignored", "reason": "job_already_failed", "job_id": job_id}
+
+    # 4. Strict idempotency check for already completed jobs
+    if job.state == JobState.COMPLETED:
+        existing_art_id = payload.artifact_id or (job.artifact_ids[0] if job.artifact_ids else None)
+        logger.info("Duplicate completed callback ignored for job %s (strictly idempotent)", job_id)
+        return {
+            "status": "completed",
+            "job_id": job_id,
+            "artifact_id": existing_art_id,
+            "duplicate": True,
+        }
 
     if cb_status == "running":
         # Report start / update status with github_run_id
@@ -241,11 +301,6 @@ async def worker_job_callback(
         return {"status": "acknowledged", "job_id": job_id, "state": "processing"}
 
     elif cb_status == "completed":
-        # Idempotency check: if job is already COMPLETED and artifact registered, return immediately
-        if job.state == JobState.COMPLETED and payload.artifact_id in job.artifact_ids:
-            logger.info("Duplicate completed callback ignored for job %s (idempotent)", job_id)
-            return {"status": "completed", "job_id": job_id, "artifact_id": payload.artifact_id}
-
         artifact_id = payload.artifact_id or f"art_gh_{payload.execution_id}"
         is_video = bool(payload.filename and payload.filename.endswith(".mp4")) or (
             payload.mime_type and "video" in payload.mime_type

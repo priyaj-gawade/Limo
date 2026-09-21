@@ -29,7 +29,10 @@ logger = logging.getLogger("limo.github_worker_runner")
 def main() -> int:
     payload_str = os.getenv("PAYLOAD_JSON", "{}").strip()
     github_run_id = os.getenv("GITHUB_RUN_ID", "0").strip()
-    worker_token = os.getenv("WORKER_AUTH_TOKEN", "").strip() or "limo-turbo-worker-secret-key-12345"
+    worker_token = os.getenv("WORKER_AUTH_TOKEN", "").strip()
+    if not worker_token:
+        logger.error("FATAL: WORKER_AUTH_TOKEN is not set in environment. Worker execution cannot proceed.")
+        return 1
 
     try:
         payload: Dict[str, Any] = json.loads(payload_str) if payload_str else {}

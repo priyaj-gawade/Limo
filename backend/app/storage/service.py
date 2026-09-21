@@ -29,6 +29,15 @@ class StorageService:
         self.extractions_dir = self.base_dir / "extractions"
         self.temp_dir = self.base_dir / "temp"
 
+        # Web surface cloud persistence (Supabase Storage)
+        self._web_storage = None
+        if settings.limo_surface.lower() == "web":
+            try:
+                from .web_storage import WebArtifactStorage
+                self._web_storage = WebArtifactStorage(local_cache_dir=self.artifacts_dir)
+            except Exception as exc:
+                logger.warning("Failed to initialize WebArtifactStorage: %s", exc)
+
     def ensure_directories(self) -> None:
         """Create storage root and mandatory subdirectories safely."""
         for directory in (self.sources_dir, self.artifacts_dir, self.extractions_dir, self.temp_dir):
@@ -152,9 +161,18 @@ class StorageService:
     def save_artifact_file(self, artifact_id: str, filename: str, content: bytes) -> Tuple[str, int, str]:
         """Atomically persist a generated deliverable artifact.
 
+        On web surface with Supabase Storage, persists durably to cloud storage and caches locally.
+        On desktop, saves strictly to local sandboxed storage.
+
         Returns: (storage_ref, size_bytes, sha256_hash).
         """
         clean_name = self._sanitize_filename(filename)
+
+        # Web surface Supabase Storage flow
+        if self._web_storage and self._web_storage.is_configured:
+            return self._web_storage.save_artifact(artifact_id, clean_name, content)
+
+        # Local filesystem flow
         storage_ref = f"artifacts/{artifact_id}/{clean_name}"
         target_path = self.safe_resolve(storage_ref)
 
@@ -171,7 +189,18 @@ class StorageService:
         return storage_ref
 
     def read_file(self, storage_ref: str) -> bytes:
-        """Read binary contents from a sandboxed storage reference."""
+        """Read binary contents from a sandboxed storage reference.
+
+        On web surface, checks local cache first; if cold-started or restarted,
+        recovers durable binary from Supabase Storage.
+        """
+        # If web storage is active and this is an artifact, try web storage recovery
+        if self._web_storage and self._web_storage.is_configured and storage_ref.startswith("artifacts/"):
+            try:
+                return self._web_storage.read_artifact(storage_ref)
+            except Exception as e:
+                logger.debug("Web storage read failed, attempting local fallback: %s", e)
+
         path = self.safe_resolve(storage_ref)
         if not path.is_file():
             raise StorageError(f"Storage asset not found: '{storage_ref}'")
@@ -179,6 +208,9 @@ class StorageService:
 
     def delete_file(self, storage_ref: str) -> bool:
         """Safely delete an asset if it exists."""
+        if self._web_storage and self._web_storage.is_configured and storage_ref.startswith("artifacts/"):
+            self._web_storage.delete_artifact(storage_ref)
+
         try:
             path = self.safe_resolve(storage_ref)
             if path.is_file():
@@ -192,6 +224,10 @@ class StorageService:
 
     def file_exists(self, storage_ref: str) -> bool:
         """Check if an asset exists in approved storage boundaries."""
+        if self._web_storage and self._web_storage.is_configured and storage_ref.startswith("artifacts/"):
+            if self._web_storage.exists(storage_ref):
+                return True
+
         try:
             path = self.safe_resolve(storage_ref)
             return path.is_file()

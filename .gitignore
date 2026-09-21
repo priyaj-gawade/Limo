@@ -16,7 +16,6 @@ client_secret_*.json
 *.cert
 *.crt
 *.pfx
-THIRD_PARTY_NOTICES.md
 
 # 2. Local Databases & Sandboxed Data Storage
 *.db

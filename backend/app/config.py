@@ -83,15 +83,37 @@ class Settings(BaseSettings):
     auth_cookie_name: str = "limo_session"
     session_ttl_days: int = 30
 
-    # Turbo Worker Offload Architecture
+    # Turbo Worker Offload Architecture & Cloud Worker
     worker_token: Optional[str] = None
+    worker_auth_token: Optional[str] = None
     turbo_worker_url: Optional[str] = None
     heavy_worker_timeout_sec: int = 300
+
+    # Supabase Storage Configuration (Durable Web Persistence)
+    supabase_url: Optional[str] = None
+    supabase_service_role_key: Optional[str] = None
+    supabase_anon_key: Optional[str] = None
+    supabase_storage_bucket: str = "limo-artifacts"
 
     # GitHub Actions Cloud Rendering Settings
     github_pat: Optional[str] = None
     github_repo: str = "priyaj-gawade/Limo"
     public_backend_url: str = "https://api.limo-ai.online"
+
+    @property
+    def resolved_worker_token(self) -> Optional[str]:
+        """Resolve worker auth token from worker_auth_token or worker_token."""
+        token = (self.worker_auth_token or self.worker_token or "").strip()
+        return token if token else None
+
+    def validate_worker_security(self) -> None:
+        """Enforce fail-closed worker authentication policy in web mode."""
+        if self.limo_surface.lower() == "web":
+            if not self.resolved_worker_token:
+                raise ValueError(
+                    "WORKER_AUTH_TOKEN is strictly mandatory when LIMO_SURFACE=web. "
+                    "Worker endpoints must fail closed. No anonymous fallback allowed."
+                )
 
     # CORS origins for local desktop/Electron environment
     cors_origins: Union[List[str], str] = [
