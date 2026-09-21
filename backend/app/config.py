@@ -109,7 +109,7 @@ class Settings(BaseSettings):
     def validate_worker_security(self) -> None:
         """Enforce fail-closed worker authentication policy in web mode."""
         if self.limo_surface.lower() == "web":
-            if not self.resolved_worker_token:
+            if not (self.worker_auth_token or self.worker_token):
                 raise ValueError(
                     "WORKER_AUTH_TOKEN is strictly mandatory when LIMO_SURFACE=web. "
                     "Worker endpoints must fail closed. No anonymous fallback allowed."

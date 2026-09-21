@@ -33,6 +33,8 @@ tests/**
 **/tests/**
 backend/tests/
 backend/tests/**
+frontend/tests/
+frontend/tests/**
 test-artifacts/
 **/test-artifacts/**
 test_artifacts/
@@ -45,6 +47,7 @@ test_artifacts/
 *_test.py
 test_*.py
 verify_*.py
+generate_*.py
 /scripts/
 /scripts/**
 .pytest_cache/

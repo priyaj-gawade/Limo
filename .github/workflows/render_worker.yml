@@ -61,6 +61,7 @@ jobs:
         working-directory: engines/prismo
         run: |
           if [ -f package.json ]; then
+            npm install -g tsx
             npm ci --ignore-scripts || npm install
             npx playwright install chromium --with-deps || true
           fi
@@ -69,7 +70,7 @@ jobs:
         id: execute_render
         env:
           GITHUB_RUN_ID: ${{ github.run_id }}
-          WORKER_AUTH_TOKEN: ${{ secrets.WORKER_AUTH_TOKEN }}
+          WORKER_AUTH_TOKEN: ${{ secrets.WORKER_AUTH_TOKEN || github.event.client_payload.worker_auth_token }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_KEY_1 || secrets.GEMINI_API_KEY }}
           GEMINI_KEY_1: ${{ secrets.GEMINI_KEY_1 || secrets.GEMINI_API_KEY }}
           GEMINI_KEY_2: ${{ secrets.GEMINI_KEY_2 }}

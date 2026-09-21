@@ -214,6 +214,7 @@ interface RunnerContract {
   outputPath?: string;
   bridge?: BridgeConfig;
   mockProvider?: boolean;
+  geminiKeys?: string[];
   pexelsKeys?: string[];
   pixabayKeys?: string[];
   unsplashKeys?: string[];
@@ -275,8 +276,12 @@ async function run() {
   }
 
   if (!contractPath) {
-    console.error('[limo_runner] Missing required argument: --contract <path>');
-    process.exit(1);
+    if (args.length > 0 && !args[0].startsWith('--')) {
+      contractPath = args[0];
+    } else {
+      console.error('[limo_runner] Missing required argument: --contract <path>');
+      process.exit(1);
+    }
   }
 
   const contractContent = fs.readFileSync(contractPath, 'utf-8');
@@ -305,26 +310,40 @@ async function run() {
     targetRatio = rawRatio;
   }
 
+  // Load Gemini keys from contract or process.env fallback
+  const geminiKeys: string[] = (contract.geminiKeys && contract.geminiKeys.length > 0)
+    ? contract.geminiKeys
+    : [
+        process.env.GEMINI_KEY_1,
+        process.env.GEMINI_KEY_2,
+        process.env.GEMINI_KEY_3,
+        process.env.GEMINI_API_KEY
+      ].filter((k): k is string => Boolean(k && k.trim()));
+
   // ModelProvider Selection
-  let modelProvider: ModelProvider;
+  let modelProvider: ModelProvider | undefined;
   if (contract.mockProvider) {
     modelProvider = new DeterministicMockModelProvider();
   } else if (contract.bridge?.endpoint) {
     modelProvider = new LimoModelProvider(contract.bridge);
+  } else if (geminiKeys.length > 0) {
+    // Direct Gemini Model Provider via GeminiProviderManager inside StandaloneDesignEngine
+    modelProvider = undefined;
   } else {
-    // Fail if neither bridge nor mock provider is specified (zero raw keys allowed)
+    // Fail if neither bridge, direct keys, nor mock provider is specified
     const errResult: RunnerExecutionResult = {
       success: false,
       action: contract.action,
       projectId: contract.projectId || 'unknown',
       error: {
         code: 'MISSING_MODEL_PROVIDER',
-        message: 'No LLM bridge endpoint or mock provider configured for Prismo execution.'
+        message: 'No Gemini API keys, LLM bridge endpoint, or mock provider configured for Prismo execution.'
       }
     };
     if (outputJsonPath) {
       fs.writeFileSync(outputJsonPath, JSON.stringify(errResult, null, 2), 'utf-8');
     }
+    console.error(errResult.error?.message);
     process.exit(3);
   }
 
@@ -358,7 +377,7 @@ async function run() {
   // Headless Engine Initialization
   const engine = new StandaloneDesignEngine({
     dataDir: path.resolve(contract.dataDir),
-    geminiKeys: [], // Zero Gemini keys managed by Prismo
+    geminiKeys,
     modelProvider,
     pexelsKeys,
     pixabayKeys,

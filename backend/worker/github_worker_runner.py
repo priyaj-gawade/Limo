@@ -29,15 +29,20 @@ logger = logging.getLogger("limo.github_worker_runner")
 def main() -> int:
     payload_str = os.getenv("PAYLOAD_JSON", "{}").strip()
     github_run_id = os.getenv("GITHUB_RUN_ID", "0").strip()
-    worker_token = os.getenv("WORKER_AUTH_TOKEN", "").strip()
-    if not worker_token:
-        logger.error("FATAL: WORKER_AUTH_TOKEN is not set in environment. Worker execution cannot proceed.")
-        return 1
 
     try:
         payload: Dict[str, Any] = json.loads(payload_str) if payload_str else {}
     except Exception as e:
         logger.error("Failed to parse PAYLOAD_JSON: %s", e)
+        return 1
+
+    worker_token = (
+        os.getenv("WORKER_AUTH_TOKEN")
+        or payload.get("worker_auth_token")
+        or ""
+    ).strip()
+    if not worker_token:
+        logger.error("FATAL: WORKER_AUTH_TOKEN is not set in environment or payload. Worker execution cannot proceed.")
         return 1
 
     job_id = payload.get("job_id", "")
@@ -126,6 +131,7 @@ def main() -> int:
         if not output_file.exists() or output_file.stat().st_size == 0:
             raise RuntimeError(f"Output deliverable file '{output_file}' is missing or empty")
 
+        size_bytes = output_file.stat().st_size
         hasher = hashlib.sha256()
         with open(output_file, "rb") as f:
             while chunk := f.read(64 * 1024):
@@ -221,6 +227,14 @@ def _render_infographic(
 
     output_path = workspace_dir / f"{artifact_id}.png"
 
+    gemini_keys = [
+        k.strip() for k in [
+            os.getenv("GEMINI_KEY_1"),
+            os.getenv("GEMINI_KEY_2"),
+            os.getenv("GEMINI_KEY_3"),
+            os.getenv("GEMINI_API_KEY"),
+        ] if k and k.strip()
+    ]
     pexels_keys = [
         k.strip() for k in [
             os.getenv("PEXELS_KEY_1"),
@@ -252,7 +266,7 @@ def _render_infographic(
         "ratio": ratio,
         "dataDir": str(workspace_dir),
         "outputPath": str(output_path),
-        "mockProvider": False,
+        "geminiKeys": gemini_keys,
         "pexelsKeys": pexels_keys,
         "pixabayKeys": pixabay_keys,
         "unsplashKeys": unsplash_keys,
@@ -261,7 +275,7 @@ def _render_infographic(
     contract_file = workspace_dir / f"contract_{artifact_id}.json"
     contract_file.write_text(json.dumps(contract), encoding="utf-8")
 
-    cmd = ["npx", "ts-node", str(runner_script), str(contract_file)] if runner_script.suffix == ".ts" else ["node", str(runner_script), str(contract_file)]
+    cmd = ["npx", "--yes", "tsx", str(runner_script), "--contract", str(contract_file)] if runner_script.suffix == ".ts" else ["node", str(runner_script), "--contract", str(contract_file)]
 
     logger.info("Executing Prismo runner: %s", " ".join(cmd))
     res = subprocess.run(
