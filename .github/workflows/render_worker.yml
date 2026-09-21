@@ -71,6 +71,9 @@ jobs:
           GITHUB_RUN_ID: ${{ github.run_id }}
           WORKER_AUTH_TOKEN: ${{ secrets.WORKER_AUTH_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_KEY_1 || secrets.GEMINI_API_KEY }}
+          GEMINI_KEY_1: ${{ secrets.GEMINI_KEY_1 || secrets.GEMINI_API_KEY }}
+          GEMINI_KEY_2: ${{ secrets.GEMINI_KEY_2 }}
+          GEMINI_KEY_3: ${{ secrets.GEMINI_KEY_3 }}
           PAYLOAD_JSON: ${{ toJson(github.event.client_payload || github.event.inputs) }}
         run: |
           python backend/worker/github_worker_runner.py
