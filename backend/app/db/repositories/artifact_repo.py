@@ -2,18 +2,18 @@
 
 from datetime import datetime
 import json
-import sqlite3
-from typing import List, Optional
+from typing import Any, List, Optional
 from ...models.artifact import Artifact, ArtifactVersion
 from ...models.provenance import CitationVerification, ProvenanceRecord, ValidationResult
 from ...models.enums import ArtifactType, ValidationStatus
+from .common import parse_dt, parse_json
 
 
 class ArtifactRepository:
     """CRUD repository for Artifacts, Versions, Validation Reports, and Provenance records."""
 
     @staticmethod
-    def create_artifact(conn: sqlite3.Connection, artifact: Artifact) -> Artifact:
+    def create_artifact(conn: Any, artifact: Artifact) -> Artifact:
         sql = """
             INSERT INTO artifacts (
                 id, project_id, job_id, title, artifact_type, file_format,
@@ -42,7 +42,7 @@ class ArtifactRepository:
         return artifact
 
     @staticmethod
-    def _row_to_model(row: sqlite3.Row) -> Artifact:
+    def _row_to_model(row: Any) -> Artifact:
         return Artifact(
             id=row["id"],
             project_id=row["project_id"],
@@ -57,12 +57,12 @@ class ArtifactRepository:
             stats=row["stats"],
             version=row["version"],
             validation_status=ValidationStatus(row["validation_status"]),
-            created_at=datetime.fromisoformat(row["created_at"]),
-            metadata=json.loads(row["metadata_json"]),
+            created_at=parse_dt(row["created_at"]),
+            metadata=parse_json(row["metadata_json"], default={}),
         )
 
     @staticmethod
-    def get_artifact(conn: sqlite3.Connection, artifact_id: str) -> Optional[Artifact]:
+    def get_artifact(conn: Any, artifact_id: str) -> Optional[Artifact]:
         sql = """
             SELECT id, project_id, job_id, title, artifact_type, file_format,
                    storage_ref, size_bytes, content_hash, description, stats,
@@ -76,7 +76,7 @@ class ArtifactRepository:
         return ArtifactRepository._row_to_model(row)
 
     @staticmethod
-    def list_artifacts_by_project(conn: sqlite3.Connection, project_id: str) -> List[Artifact]:
+    def list_artifacts_by_project(conn: Any, project_id: str) -> List[Artifact]:
         sql = """
             SELECT id, project_id, job_id, title, artifact_type, file_format,
                    storage_ref, size_bytes, content_hash, description, stats,
@@ -89,7 +89,7 @@ class ArtifactRepository:
         return [ArtifactRepository._row_to_model(row) for row in rows]
 
     @staticmethod
-    def list_artifacts_by_job(conn: sqlite3.Connection, job_id: str) -> List[Artifact]:
+    def list_artifacts_by_job(conn: Any, job_id: str) -> List[Artifact]:
         sql = """
             SELECT id, project_id, job_id, title, artifact_type, file_format,
                    storage_ref, size_bytes, content_hash, description, stats,
@@ -103,7 +103,7 @@ class ArtifactRepository:
 
     @staticmethod
     def update_artifact_validation_status(
-        conn: sqlite3.Connection, artifact_id: str, status: ValidationStatus
+        conn: Any, artifact_id: str, status: ValidationStatus
     ) -> bool:
         sql = "UPDATE artifacts SET validation_status = ? WHERE id = ?"
         cur = conn.execute(sql, (status.value, artifact_id))
@@ -111,14 +111,14 @@ class ArtifactRepository:
 
     @staticmethod
     def update_artifact_metadata(
-        conn: sqlite3.Connection, artifact_id: str, metadata: dict
+        conn: Any, artifact_id: str, metadata: dict
     ) -> bool:
         sql = "UPDATE artifacts SET metadata_json = ? WHERE id = ?"
         cur = conn.execute(sql, (json.dumps(metadata), artifact_id))
         return cur.rowcount > 0
 
     @staticmethod
-    def create_artifact_version(conn: sqlite3.Connection, version: ArtifactVersion) -> ArtifactVersion:
+    def create_artifact_version(conn: Any, version: ArtifactVersion) -> ArtifactVersion:
         sql = """
             INSERT INTO artifact_versions (
                 id, artifact_id, version_number, storage_ref, size_bytes,
@@ -139,7 +139,7 @@ class ArtifactRepository:
         return version
 
     @staticmethod
-    def _row_to_version(row: sqlite3.Row) -> ArtifactVersion:
+    def _row_to_version(row: Any) -> ArtifactVersion:
         return ArtifactVersion(
             id=row["id"],
             artifact_id=row["artifact_id"],
@@ -148,11 +148,11 @@ class ArtifactRepository:
             size_bytes=row["size_bytes"],
             content_hash=row["content_hash"],
             change_summary=row["change_summary"],
-            created_at=datetime.fromisoformat(row["created_at"]),
+            created_at=parse_dt(row["created_at"]),
         )
 
     @staticmethod
-    def get_artifact_versions(conn: sqlite3.Connection, artifact_id: str) -> List[ArtifactVersion]:
+    def get_artifact_versions(conn: Any, artifact_id: str) -> List[ArtifactVersion]:
         sql = """
             SELECT id, artifact_id, version_number, storage_ref, size_bytes,
                    content_hash, change_summary, created_at
@@ -164,7 +164,7 @@ class ArtifactRepository:
         return [ArtifactRepository._row_to_version(row) for row in rows]
 
     @staticmethod
-    def create_validation_result(conn: sqlite3.Connection, result: ValidationResult) -> ValidationResult:
+    def create_validation_result(conn: Any, result: ValidationResult) -> ValidationResult:
         sql = """
             INSERT INTO validation_results (
                 id, artifact_id, is_valid, score, hallucination_check_passed,
@@ -176,9 +176,9 @@ class ArtifactRepository:
         conn.execute(sql, (
             result.id,
             result.artifact_id,
-            1 if result.is_valid else 0,
+            bool(result.is_valid),
             result.score,
-            1 if result.hallucination_check_passed else 0,
+            bool(result.hallucination_check_passed),
             json.dumps(citations_data),
             json.dumps(result.warnings),
             json.dumps(result.errors),
@@ -187,7 +187,7 @@ class ArtifactRepository:
         return result
 
     @staticmethod
-    def get_validation_result(conn: sqlite3.Connection, artifact_id: str) -> Optional[ValidationResult]:
+    def get_validation_result(conn: Any, artifact_id: str) -> Optional[ValidationResult]:
         sql = """
             SELECT id, artifact_id, is_valid, score, hallucination_check_passed,
                    citations_verified_json, warnings_json, errors_json, validated_at
@@ -200,7 +200,7 @@ class ArtifactRepository:
         if not row:
             return None
 
-        raw_citations = json.loads(row["citations_verified_json"])
+        raw_citations = parse_json(row["citations_verified_json"], default=[])
         citations = [CitationVerification(**c) for c in raw_citations]
 
         return ValidationResult(
@@ -210,13 +210,13 @@ class ArtifactRepository:
             score=row["score"],
             hallucination_check_passed=bool(row["hallucination_check_passed"]),
             citations_verified=citations,
-            warnings=json.loads(row["warnings_json"]),
-            errors=json.loads(row["errors_json"]),
-            validated_at=datetime.fromisoformat(row["validated_at"]),
+            warnings=parse_json(row["warnings_json"], default=[]),
+            errors=parse_json(row["errors_json"], default=[]),
+            validated_at=parse_dt(row["validated_at"]),
         )
 
     @staticmethod
-    def create_provenance_record(conn: sqlite3.Connection, provenance: ProvenanceRecord) -> ProvenanceRecord:
+    def create_provenance_record(conn: Any, provenance: ProvenanceRecord) -> ProvenanceRecord:
         sql = """
             INSERT INTO provenance (
                 id, artifact_id, artifact_hash, source_hashes_json,
@@ -240,7 +240,7 @@ class ArtifactRepository:
         return provenance
 
     @staticmethod
-    def get_provenance_record(conn: sqlite3.Connection, artifact_id: str) -> Optional[ProvenanceRecord]:
+    def get_provenance_record(conn: Any, artifact_id: str) -> Optional[ProvenanceRecord]:
         sql = """
             SELECT id, artifact_id, artifact_hash, source_hashes_json,
                    canonical_content_hash, transformation_job_id,
@@ -258,18 +258,18 @@ class ArtifactRepository:
             id=row["id"],
             artifact_id=row["artifact_id"],
             artifact_hash=row["artifact_hash"],
-            source_hashes=json.loads(row["source_hashes_json"]),
+            source_hashes=parse_json(row["source_hashes_json"], default=[]),
             canonical_content_hash=row["canonical_content_hash"],
             transformation_job_id=row["transformation_job_id"],
             generator_name=row["generator_name"],
             model_version=row["model_version"],
             signature=row["signature"],
-            created_at=datetime.fromisoformat(row["created_at"]),
+            created_at=parse_dt(row["created_at"]),
         )
 
     @staticmethod
     def list_artifacts(
-        conn: sqlite3.Connection,
+        conn: Any,
         project_id: Optional[str] = None,
         job_id: Optional[str] = None,
         artifact_type: Optional[ArtifactType] = None,
@@ -301,15 +301,18 @@ class ArtifactRepository:
         return [ArtifactRepository._row_to_model(row) for row in rows]
 
     @staticmethod
-    def get_next_version_number(conn: sqlite3.Connection, artifact_id: str) -> int:
+    def get_next_version_number(conn: Any, artifact_id: str) -> int:
         """Calculate next monotonic version using COALESCE(MAX(version_number), 0) + 1."""
         sql = "SELECT COALESCE(MAX(version_number), 0) + 1 FROM artifact_versions WHERE artifact_id = ?"
         row = conn.execute(sql, (artifact_id,)).fetchone()
-        return int(row[0]) if row and row[0] is not None else 1
+        if not row:
+            return 1
+        val = next(iter(row.values())) if isinstance(row, dict) else row[0]
+        return int(val) if val is not None else 1
 
     @staticmethod
     def update_artifact_version(
-        conn: sqlite3.Connection,
+        conn: Any,
         artifact_id: str,
         version: int,
         storage_ref: str,
@@ -324,4 +327,3 @@ class ArtifactRepository:
         """
         cur = conn.execute(sql, (version, storage_ref, size_bytes, content_hash, artifact_id))
         return cur.rowcount > 0
-

@@ -151,7 +151,7 @@ async def google_callback(
     expected_state = limo_oauth_state or oauth_state
     user, session_token = await _process_oauth_callback(code, state, expected_state)
 
-    redirect_dest = auth_config.google_redirect_uri.split("/auth/callback")[0] or "/"
+    redirect_dest = auth_config.frontend_url or "http://localhost:5190"
     resp = RedirectResponse(url=redirect_dest, status_code=status.HTTP_303_SEE_OTHER)
     resp.set_cookie(
         key="limo_session",

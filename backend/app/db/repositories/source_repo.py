@@ -2,17 +2,17 @@
 
 from datetime import datetime
 import json
-import sqlite3
-from typing import List, Optional
+from typing import Any, List, Optional
 from ...models.project import Source
 from ...models.enums import SourceType
+from .common import parse_dt, parse_json
 
 
 class SourceRepository:
     """CRUD repository for Ingested Source assets."""
 
     @staticmethod
-    def create_source(conn: sqlite3.Connection, source: Source) -> Source:
+    def create_source(conn: Any, source: Source) -> Source:
         sql = """
             INSERT INTO sources (
                 id, project_id, name, source_type, mime_type, storage_ref,
@@ -36,7 +36,7 @@ class SourceRepository:
         return source
 
     @staticmethod
-    def _row_to_model(row: sqlite3.Row) -> Source:
+    def _row_to_model(row: Any) -> Source:
         return Source(
             id=row["id"],
             project_id=row["project_id"],
@@ -47,12 +47,12 @@ class SourceRepository:
             size_bytes=row["size_bytes"],
             content_hash=row["content_hash"],
             extracted_text=row["extracted_text"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            metadata=json.loads(row["metadata_json"]),
+            created_at=parse_dt(row["created_at"]),
+            metadata=parse_json(row["metadata_json"], default={}),
         )
 
     @staticmethod
-    def get_source(conn: sqlite3.Connection, source_id: str) -> Optional[Source]:
+    def get_source(conn: Any, source_id: str) -> Optional[Source]:
         sql = """
             SELECT id, project_id, name, source_type, mime_type, storage_ref,
                    size_bytes, content_hash, extracted_text, created_at, metadata_json
@@ -65,7 +65,7 @@ class SourceRepository:
         return SourceRepository._row_to_model(row)
 
     @staticmethod
-    def list_sources_by_project(conn: sqlite3.Connection, project_id: str) -> List[Source]:
+    def list_sources_by_project(conn: Any, project_id: str) -> List[Source]:
         sql = """
             SELECT id, project_id, name, source_type, mime_type, storage_ref,
                    size_bytes, content_hash, extracted_text, created_at, metadata_json
@@ -78,7 +78,7 @@ class SourceRepository:
 
     @staticmethod
     def get_source_by_hash(
-        conn: sqlite3.Connection,
+        conn: Any,
         content_hash: str,
         project_id: Optional[str] = None,
     ) -> Optional[Source]:
@@ -107,26 +107,33 @@ class SourceRepository:
 
     @staticmethod
     def get_source_by_cache_key(
-        conn: sqlite3.Connection,
+        conn: Any,
         cache_key: str,
         project_id: Optional[str] = None,
     ) -> Optional[Source]:
         """Lookup an existing source by its composite extraction cache key in metadata_json."""
+        is_pg = getattr(conn, "is_postgres", False)
+        json_filter = (
+            "metadata_json::jsonb ->> 'composite_cache_key' = ?"
+            if is_pg
+            else "json_extract(metadata_json, '$.composite_cache_key') = ?"
+        )
+
         if project_id:
-            sql = """
+            sql = f"""
                 SELECT id, project_id, name, source_type, mime_type, storage_ref,
                        size_bytes, content_hash, extracted_text, created_at, metadata_json
                 FROM sources
-                WHERE json_extract(metadata_json, '$.composite_cache_key') = ? AND project_id = ?
+                WHERE {json_filter} AND project_id = ?
                 LIMIT 1
             """
             row = conn.execute(sql, (cache_key, project_id)).fetchone()
         else:
-            sql = """
+            sql = f"""
                 SELECT id, project_id, name, source_type, mime_type, storage_ref,
                        size_bytes, content_hash, extracted_text, created_at, metadata_json
                 FROM sources
-                WHERE json_extract(metadata_json, '$.composite_cache_key') = ?
+                WHERE {json_filter}
                 LIMIT 1
             """
             row = conn.execute(sql, (cache_key,)).fetchone()
@@ -137,7 +144,7 @@ class SourceRepository:
 
     @staticmethod
     def update_source_metadata(
-        conn: sqlite3.Connection,
+        conn: Any,
         source_id: str,
         metadata: dict,
         extracted_text: Optional[str] = None,
@@ -159,7 +166,7 @@ class SourceRepository:
         return cur.rowcount > 0
 
     @staticmethod
-    def delete_source(conn: sqlite3.Connection, source_id: str) -> bool:
+    def delete_source(conn: Any, source_id: str) -> bool:
         sql = "DELETE FROM sources WHERE id = ?"
         cur = conn.execute(sql, (source_id,))
         return cur.rowcount > 0

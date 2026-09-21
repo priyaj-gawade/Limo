@@ -1,4 +1,4 @@
-"""Authentication and Surface Configuration for Limo (Phase D9.5)."""
+"""Authentication and Surface Configuration for Limo (Phase D9.5 & D9.6)."""
 
 import json
 import logging
@@ -16,7 +16,8 @@ class AuthConfig(BaseModel):
     surface: str = "desktop"  # "desktop" or "web"
     google_client_id: Optional[str] = None
     google_client_secret: Optional[str] = None
-    google_redirect_uri: str = "http://localhost:5190/auth/callback"
+    google_redirect_uri: str = "http://localhost:8000/api/v1/auth/google/callback"
+    frontend_url: str = "http://localhost:5190"
     session_expiry_days: int = 7
 
     @property
@@ -58,7 +59,8 @@ def load_auth_config(repo_root: Optional[Path] = None) -> AuthConfig:
 
     client_id = os.getenv("GOOGLE_CLIENT_ID")
     client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
-    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:5190/auth/callback")
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/api/v1/auth/google/callback")
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5190")
 
     # Fallback to credentials/google_auth.json if environment variables are not set
     if not client_id or not client_secret:
@@ -72,8 +74,7 @@ def load_auth_config(repo_root: Optional[Path] = None) -> AuthConfig:
                 client_secret = client_secret or web_data.get("client_secret")
                 uris = web_data.get("redirect_uris", [])
                 if uris and not os.getenv("GOOGLE_REDIRECT_URI"):
-                    # Prefer frontend callback if present
-                    redirect_uri = next((u for u in uris if "callback" in u), uris[0])
+                    redirect_uri = next((u for u in uris if "google/callback" in u), uris[0])
             except Exception as e:
                 logger.warning("Failed to parse credentials/google_auth.json: %s", e)
 
@@ -82,6 +83,7 @@ def load_auth_config(repo_root: Optional[Path] = None) -> AuthConfig:
         google_client_id=client_id,
         google_client_secret=client_secret,
         google_redirect_uri=redirect_uri,
+        frontend_url=frontend_url,
     )
 
     # Fail-closed enforcement on web surface

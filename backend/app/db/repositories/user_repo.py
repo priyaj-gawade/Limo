@@ -1,16 +1,16 @@
 """Repository for User and UserSession entities."""
 
 from datetime import datetime, timezone
-import sqlite3
-from typing import Optional
+from typing import Any, Optional
 from ...models.user import User, UserSession, generate_user_id
+from .common import parse_dt
 
 
 class UserRepository:
     """CRUD repository for user identity and authenticated sessions."""
 
     @staticmethod
-    def create_or_update_user(conn: sqlite3.Connection, user: User) -> User:
+    def create_or_update_user(conn: Any, user: User) -> User:
         now = datetime.now(timezone.utc).isoformat()
         row = conn.execute(
             "SELECT * FROM users WHERE provider_subject = ? OR id = ?",
@@ -34,8 +34,8 @@ class UserRepository:
                 email=user.email,
                 display_name=user.display_name or row["display_name"],
                 avatar_url=user.avatar_url or row["avatar_url"],
-                created_at=datetime.fromisoformat(row["created_at"]),
-                last_login_at=datetime.fromisoformat(now),
+                created_at=parse_dt(row["created_at"]),
+                last_login_at=parse_dt(now),
             )
 
         user_id = user.id or generate_user_id()
@@ -53,13 +53,13 @@ class UserRepository:
             email=user.email,
             display_name=user.display_name,
             avatar_url=user.avatar_url,
-            created_at=datetime.fromisoformat(now),
-            last_login_at=datetime.fromisoformat(now),
+            created_at=parse_dt(now),
+            last_login_at=parse_dt(now),
         )
 
     @staticmethod
     def get_or_create_user(
-        conn: sqlite3.Connection,
+        conn: Any,
         provider_subject: str,
         email: str,
         display_name: Optional[str] = None,
@@ -89,8 +89,8 @@ class UserRepository:
                 email=email,
                 display_name=display_name or row["display_name"],
                 avatar_url=avatar_url or row["avatar_url"],
-                created_at=datetime.fromisoformat(row["created_at"]),
-                last_login_at=datetime.fromisoformat(now),
+                created_at=parse_dt(row["created_at"]),
+                last_login_at=parse_dt(now),
             )
 
         user_id = generate_user_id()
@@ -108,12 +108,12 @@ class UserRepository:
             email=email,
             display_name=display_name,
             avatar_url=avatar_url,
-            created_at=datetime.fromisoformat(now),
-            last_login_at=datetime.fromisoformat(now),
+            created_at=parse_dt(now),
+            last_login_at=parse_dt(now),
         )
 
     @staticmethod
-    def get_user_by_id(conn: sqlite3.Connection, user_id: str) -> Optional[User]:
+    def get_user_by_id(conn: Any, user_id: str) -> Optional[User]:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         if not row:
             return None
@@ -124,13 +124,13 @@ class UserRepository:
             email=row["email"],
             display_name=row["display_name"],
             avatar_url=row["avatar_url"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            last_login_at=datetime.fromisoformat(row["last_login_at"]),
+            created_at=parse_dt(row["created_at"]),
+            last_login_at=parse_dt(row["last_login_at"]),
         )
 
     @staticmethod
     def create_session(
-        conn: sqlite3.Connection,
+        conn: Any,
         session_token: str,
         user_id: str,
         expires_at: datetime,
@@ -152,7 +152,7 @@ class UserRepository:
         )
 
     @staticmethod
-    def get_session(conn: sqlite3.Connection, session_token: str) -> Optional[UserSession]:
+    def get_session(conn: Any, session_token: str) -> Optional[UserSession]:
         row = conn.execute(
             "SELECT * FROM user_sessions WHERE session_token = ?",
             (session_token,)
@@ -162,13 +162,13 @@ class UserRepository:
         return UserSession(
             session_token=row["session_token"],
             user_id=row["user_id"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            expires_at=datetime.fromisoformat(row["expires_at"]),
-            last_accessed_at=datetime.fromisoformat(row["last_accessed_at"]),
+            created_at=parse_dt(row["created_at"]),
+            expires_at=parse_dt(row["expires_at"]),
+            last_accessed_at=parse_dt(row["last_accessed_at"]),
         )
 
     @staticmethod
-    def touch_session(conn: sqlite3.Connection, session_token: str) -> None:
+    def touch_session(conn: Any, session_token: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "UPDATE user_sessions SET last_accessed_at = ? WHERE session_token = ?",
@@ -176,12 +176,12 @@ class UserRepository:
         )
 
     @staticmethod
-    def delete_session(conn: sqlite3.Connection, session_token: str) -> bool:
+    def delete_session(conn: Any, session_token: str) -> bool:
         cur = conn.execute("DELETE FROM user_sessions WHERE session_token = ?", (session_token,))
         return cur.rowcount > 0
 
     @staticmethod
-    def delete_expired_sessions(conn: sqlite3.Connection) -> int:
+    def delete_expired_sessions(conn: Any) -> int:
         now = datetime.now(timezone.utc).isoformat()
         cur = conn.execute("DELETE FROM user_sessions WHERE expires_at < ?", (now,))
         return cur.rowcount

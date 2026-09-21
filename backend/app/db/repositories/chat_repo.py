@@ -2,17 +2,17 @@
 
 from datetime import datetime
 import json
-import sqlite3
-from typing import List, Optional
+from typing import Any, List, Optional
 from ...models.chat import ChatSession, Message, MessageAttachment
 from ...models.enums import FeatureMode, MessageRole
+from .common import parse_dt, parse_json
 
 
 class ChatRepository:
     """CRUD repository for Chat Sessions and Messages."""
 
     @staticmethod
-    def create_session(conn: sqlite3.Connection, session: ChatSession) -> ChatSession:
+    def create_session(conn: Any, session: ChatSession) -> ChatSession:
         sql = """
             INSERT INTO chats (id, project_id, title, mode, created_at, updated_at, metadata_json)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -29,19 +29,19 @@ class ChatRepository:
         return session
 
     @staticmethod
-    def _row_to_model(row: sqlite3.Row) -> ChatSession:
+    def _row_to_model(row: Any) -> ChatSession:
         return ChatSession(
             id=row["id"],
             project_id=row["project_id"],
             title=row["title"],
             mode=FeatureMode(row["mode"]),
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
-            metadata=json.loads(row["metadata_json"]),
+            created_at=parse_dt(row["created_at"]),
+            updated_at=parse_dt(row["updated_at"]),
+            metadata=parse_json(row["metadata_json"], default={}),
         )
 
     @staticmethod
-    def get_session(conn: sqlite3.Connection, session_id: str) -> Optional[ChatSession]:
+    def get_session(conn: Any, session_id: str) -> Optional[ChatSession]:
         sql = "SELECT id, project_id, title, mode, created_at, updated_at, metadata_json FROM chats WHERE id = ?"
         row = conn.execute(sql, (session_id,)).fetchone()
         if not row:
@@ -49,7 +49,7 @@ class ChatRepository:
         return ChatRepository._row_to_model(row)
 
     @staticmethod
-    def list_sessions(conn: sqlite3.Connection, project_id: Optional[str] = None) -> List[ChatSession]:
+    def list_sessions(conn: Any, project_id: Optional[str] = None) -> List[ChatSession]:
         if project_id:
             sql = "SELECT id, project_id, title, mode, created_at, updated_at, metadata_json FROM chats WHERE project_id = ? ORDER BY updated_at DESC"
             rows = conn.execute(sql, (project_id,)).fetchall()
@@ -60,7 +60,7 @@ class ChatRepository:
         return [ChatRepository._row_to_model(row) for row in rows]
 
     @staticmethod
-    def update_session(conn: sqlite3.Connection, session: ChatSession) -> Optional[ChatSession]:
+    def update_session(conn: Any, session: ChatSession) -> Optional[ChatSession]:
         sql = """
             UPDATE chats
             SET title = ?, mode = ?, updated_at = ?, metadata_json = ?
@@ -78,13 +78,13 @@ class ChatRepository:
         return session
 
     @staticmethod
-    def delete_session(conn: sqlite3.Connection, session_id: str) -> bool:
+    def delete_session(conn: Any, session_id: str) -> bool:
         sql = "DELETE FROM chats WHERE id = ?"
         cur = conn.execute(sql, (session_id,))
         return cur.rowcount > 0
 
     @staticmethod
-    def add_message(conn: sqlite3.Connection, message: Message) -> Message:
+    def add_message(conn: Any, message: Message) -> Message:
         sql = """
             INSERT INTO messages (
                 id, session_id, role, content, mode,
@@ -113,8 +113,8 @@ class ChatRepository:
         return message
 
     @staticmethod
-    def _row_to_message(row: sqlite3.Row) -> Message:
-        raw_attachments = json.loads(row["attachments_json"])
+    def _row_to_message(row: Any) -> Message:
+        raw_attachments = parse_json(row["attachments_json"], default=[])
         attachments = [MessageAttachment(**att) for att in raw_attachments]
         return Message(
             id=row["id"],
@@ -123,13 +123,13 @@ class ChatRepository:
             content=row["content"],
             mode=FeatureMode(row["mode"]) if row["mode"] else None,
             attachments=attachments,
-            artifact_ids=json.loads(row["artifact_ids_json"]),
+            artifact_ids=parse_json(row["artifact_ids_json"], default=[]),
             execution_summary=row["execution_summary"],
-            created_at=datetime.fromisoformat(row["created_at"]),
+            created_at=parse_dt(row["created_at"]),
         )
 
     @staticmethod
-    def get_messages(conn: sqlite3.Connection, session_id: str) -> List[Message]:
+    def get_messages(conn: Any, session_id: str) -> List[Message]:
         sql = """
             SELECT id, session_id, role, content, mode,
                    attachments_json, artifact_ids_json, execution_summary, created_at
@@ -141,7 +141,7 @@ class ChatRepository:
         return [ChatRepository._row_to_message(row) for row in rows]
 
     @staticmethod
-    def delete_message(conn: sqlite3.Connection, message_id: str) -> bool:
+    def delete_message(conn: Any, message_id: str) -> bool:
         sql = "DELETE FROM messages WHERE id = ?"
         cur = conn.execute(sql, (message_id,))
         return cur.rowcount > 0

@@ -1,9 +1,8 @@
-"""Repository for TransformationJob, CanonicalContent, and JobEvent entities."""
+"""Repository for TransformationJob and lifecycle execution events."""
 
 from datetime import datetime, timezone
 import json
-import sqlite3
-from typing import List, Optional
+from typing import Any, List, Optional
 from ...models.job import GenerationConfig, TransformationJob
 from ...models.content import CanonicalContent
 from ...models.enums import JobState, OutputFormat
@@ -11,22 +10,23 @@ from ...models.transformation_events import (
     TransformationEventType,
     TransformationLifecycleEvent,
 )
+from .common import parse_dt, parse_json
 
 
 class JobRepository:
-    """CRUD repository for Transformation Jobs, Canonical Content, and persistent Job Events."""
+    """CRUD repository for TransformationJob and lifecycle execution events."""
 
     @staticmethod
-    def create_job(conn: sqlite3.Connection, job: TransformationJob) -> TransformationJob:
+    def create_job(conn: Any, job: TransformationJob) -> TransformationJob:
         sql = """
             INSERT INTO jobs (
-                id, user_id, project_id, session_id, prompt, source_ids_json, requested_formats_json, configuration_json,
-                state, progress, current_stage, error, artifact_ids_json, execution_id, worker_id, attempt_count,
-                claimed_at, cancellation_requested, created_at, updated_at
+                id, user_id, project_id, session_id, prompt, source_ids_json,
+                requested_formats_json, configuration_json, state, progress,
+                current_stage, error, artifact_ids_json, execution_id, worker_id,
+                attempt_count, claimed_at, cancellation_requested, created_at, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
-        formats_data = [fmt.value for fmt in job.requested_formats]
         conn.execute(sql, (
             job.id,
             job.user_id,
@@ -34,8 +34,8 @@ class JobRepository:
             job.session_id,
             job.prompt,
             json.dumps(job.source_ids),
-            json.dumps(formats_data),
-            json.dumps(job.configuration.model_dump(mode="json")),
+            json.dumps([f.value for f in job.requested_formats]),
+            job.configuration.model_dump_json(),
             job.state.value,
             job.progress,
             job.current_stage,
@@ -45,29 +45,29 @@ class JobRepository:
             job.worker_id,
             job.attempt_count,
             job.claimed_at.isoformat() if job.claimed_at else None,
-            1 if job.cancellation_requested else 0,
+            job.cancellation_requested,
             job.created_at.isoformat(),
             job.updated_at.isoformat(),
         ))
         return job
 
     @staticmethod
-    def _row_to_model(row: sqlite3.Row) -> TransformationJob:
-        raw_formats = json.loads(row["requested_formats_json"])
+    def _row_to_model(row: Any) -> TransformationJob:
+        raw_formats = parse_json(row["requested_formats_json"], default=[])
         formats = [OutputFormat(f) for f in raw_formats]
-        config_data = json.loads(row["configuration_json"])
-        source_ids = json.loads(row["source_ids_json"]) if row["source_ids_json"] else []
+        config_data = parse_json(row["configuration_json"], default={})
+        source_ids = parse_json(row["source_ids_json"], default=[]) if row["source_ids_json"] else []
 
         claimed_at = None
         if "claimed_at" in row.keys() and row["claimed_at"]:
-            claimed_at = datetime.fromisoformat(row["claimed_at"])
+            claimed_at = parse_dt(row["claimed_at"])
 
         return TransformationJob(
             id=row["id"],
             user_id=row["user_id"] if "user_id" in row.keys() else None,
             project_id=row["project_id"],
             session_id=row["session_id"],
-            prompt=row["prompt"],
+            prompt=row["prompt"] if "prompt" in row.keys() else None,
             source_ids=source_ids,
             requested_formats=formats,
             configuration=GenerationConfig(**config_data),
@@ -75,19 +75,26 @@ class JobRepository:
             progress=row["progress"],
             current_stage=row["current_stage"],
             error=row["error"],
-            artifact_ids=json.loads(row["artifact_ids_json"]),
+            artifact_ids=parse_json(row["artifact_ids_json"], default=[]),
             execution_id=row["execution_id"] if "execution_id" in row.keys() else None,
             worker_id=row["worker_id"] if "worker_id" in row.keys() else None,
             attempt_count=row["attempt_count"] if "attempt_count" in row.keys() else 0,
             claimed_at=claimed_at,
             cancellation_requested=bool(row["cancellation_requested"]) if "cancellation_requested" in row.keys() else False,
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
+            created_at=parse_dt(row["created_at"]),
+            updated_at=parse_dt(row["updated_at"]),
         )
 
     @staticmethod
-    def get_job(conn: sqlite3.Connection, job_id: str) -> Optional[TransformationJob]:
-        sql = "SELECT * FROM jobs WHERE id = ?"
+    def get_job(conn: Any, job_id: str) -> Optional[TransformationJob]:
+        sql = """
+            SELECT id, user_id, project_id, session_id, prompt, source_ids_json,
+                   requested_formats_json, configuration_json, state, progress,
+                   current_stage, error, artifact_ids_json, execution_id, worker_id,
+                   attempt_count, claimed_at, cancellation_requested, created_at, updated_at
+            FROM jobs
+            WHERE id = ?
+        """
         row = conn.execute(sql, (job_id,)).fetchone()
         if not row:
             return None
@@ -95,15 +102,22 @@ class JobRepository:
 
     @staticmethod
     def list_jobs(
-        conn: sqlite3.Connection,
+        conn: Any,
+        user_id: Optional[str] = None,
         project_id: Optional[str] = None,
         session_id: Optional[str] = None,
         state: Optional[JobState] = None,
-        user_id: Optional[str] = None,
     ) -> List[TransformationJob]:
-        query = "SELECT * FROM jobs"
+        query = """
+            SELECT id, user_id, project_id, session_id, prompt, source_ids_json,
+                   requested_formats_json, configuration_json, state, progress,
+                   current_stage, error, artifact_ids_json, execution_id, worker_id,
+                   attempt_count, claimed_at, cancellation_requested, created_at, updated_at
+            FROM jobs
+        """
         clauses = []
         params = []
+
         if user_id:
             clauses.append("user_id = ?")
             params.append(user_id)
@@ -126,7 +140,7 @@ class JobRepository:
 
     @staticmethod
     def claim_job_execution(
-        conn: sqlite3.Connection,
+        conn: Any,
         job_id: str,
         worker_id: str,
         execution_id: str,
@@ -141,7 +155,7 @@ class JobRepository:
                 attempt_count = attempt_count + 1,
                 claimed_at = ?,
                 updated_at = ?
-            WHERE id = ? AND state = ? AND cancellation_requested = 0
+            WHERE id = ? AND state = ? AND cancellation_requested = ?
         """
         cur = conn.execute(sql, (
             JobState.PROCESSING.value,
@@ -151,36 +165,37 @@ class JobRepository:
             now,
             job_id,
             JobState.QUEUED.value,
+            False,
         ))
         return cur.rowcount > 0
 
     @staticmethod
-    def request_cancellation(conn: sqlite3.Connection, job_id: str) -> bool:
+    def request_cancellation(conn: Any, job_id: str) -> bool:
         """Flag cancellation_requested atomically without prematurely forcing CANCELLED state."""
         now = datetime.now(timezone.utc).isoformat()
         sql = """
             UPDATE jobs
-            SET cancellation_requested = 1,
+            SET cancellation_requested = ?,
                 updated_at = ?
             WHERE id = ? AND state IN (?, ?)
         """
-        cur = conn.execute(sql, (now, job_id, JobState.QUEUED.value, JobState.PROCESSING.value))
+        cur = conn.execute(sql, (True, now, job_id, JobState.QUEUED.value, JobState.PROCESSING.value))
         return cur.rowcount > 0
 
     @staticmethod
-    def get_stale_jobs(conn: sqlite3.Connection) -> List[TransformationJob]:
+    def get_stale_jobs(conn: Any) -> List[TransformationJob]:
         """Fetch abandoned running jobs or unexecuted queued jobs for startup recovery."""
         sql = """
             SELECT * FROM jobs
-            WHERE state = ? OR (state = ? AND cancellation_requested = 0)
+            WHERE state = ? OR (state = ? AND cancellation_requested = ?)
             ORDER BY created_at ASC
         """
-        rows = conn.execute(sql, (JobState.PROCESSING.value, JobState.QUEUED.value)).fetchall()
+        rows = conn.execute(sql, (JobState.PROCESSING.value, JobState.QUEUED.value, False)).fetchall()
         return [JobRepository._row_to_model(row) for row in rows]
 
     @staticmethod
     def update_job_progress(
-        conn: sqlite3.Connection,
+        conn: Any,
         job_id: str,
         state: JobState,
         progress: float,
@@ -204,7 +219,7 @@ class JobRepository:
 
         if cancellation_requested is not None:
             fields.append("cancellation_requested = ?")
-            params.append(1 if cancellation_requested else 0)
+            params.append(cancellation_requested)
 
         params.append(job_id)
         sql = f"UPDATE jobs SET {', '.join(fields)} WHERE id = ?"
@@ -212,13 +227,14 @@ class JobRepository:
         return cur.rowcount > 0
 
     @staticmethod
-    def save_job_event(conn: sqlite3.Connection, event: TransformationLifecycleEvent) -> None:
-        """Persist a lifecycle event to SQLite for durable SSE replay."""
+    def save_job_event(conn: Any, event: TransformationLifecycleEvent) -> None:
+        """Persist a lifecycle event for durable SSE replay."""
         sql = """
-            INSERT OR IGNORE INTO job_events (
+            INSERT INTO job_events (
                 event_id, job_id, sequence, event_type, payload_json, created_at
             )
             VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT DO NOTHING
         """
         conn.execute(sql, (
             event.event_id,
@@ -231,7 +247,7 @@ class JobRepository:
 
     @staticmethod
     def get_job_events(
-        conn: sqlite3.Connection,
+        conn: Any,
         job_id: str,
         after_sequence: int = 0,
     ) -> List[TransformationLifecycleEvent]:
@@ -249,22 +265,36 @@ class JobRepository:
                 job_id=row["job_id"],
                 sequence=row["sequence"],
                 event_type=TransformationEventType(row["event_type"]),
-                payload=json.loads(row["payload_json"]),
-                timestamp=datetime.fromisoformat(row["created_at"]),
+                payload=parse_json(row["payload_json"], default={}),
+                timestamp=parse_dt(row["created_at"]),
             )
             for row in rows
         ]
 
     @staticmethod
-    def save_canonical_content(conn: sqlite3.Connection, canonical: CanonicalContent) -> CanonicalContent:
+    def save_canonical_content(conn: Any, canonical: CanonicalContent) -> CanonicalContent:
         sql = """
-            INSERT OR REPLACE INTO canonical_contents (
+            INSERT INTO canonical_contents (
                 id, source_ids_json, title, context, intent_json,
                 entities_json, facts_json, claims_json, events_json,
                 data_points_json, recommendations_json, references_json,
                 content_hash, created_at, metadata_json
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET
+                source_ids_json = EXCLUDED.source_ids_json,
+                title = EXCLUDED.title,
+                context = EXCLUDED.context,
+                intent_json = EXCLUDED.intent_json,
+                entities_json = EXCLUDED.entities_json,
+                facts_json = EXCLUDED.facts_json,
+                claims_json = EXCLUDED.claims_json,
+                events_json = EXCLUDED.events_json,
+                data_points_json = EXCLUDED.data_points_json,
+                recommendations_json = EXCLUDED.recommendations_json,
+                references_json = EXCLUDED.references_json,
+                content_hash = EXCLUDED.content_hash,
+                metadata_json = EXCLUDED.metadata_json
         """
         conn.execute(sql, (
             canonical.id,
@@ -286,7 +316,7 @@ class JobRepository:
         return canonical
 
     @staticmethod
-    def get_canonical_content(conn: sqlite3.Connection, canonical_id: str) -> Optional[CanonicalContent]:
+    def get_canonical_content(conn: Any, canonical_id: str) -> Optional[CanonicalContent]:
         sql = """
             SELECT id, source_ids_json, title, context, intent_json,
                    entities_json, facts_json, claims_json, events_json,
@@ -311,18 +341,18 @@ class JobRepository:
 
         return CanonicalContent(
             id=row["id"],
-            source_ids=json.loads(row["source_ids_json"]),
+            source_ids=parse_json(row["source_ids_json"], default=[]),
             title=row["title"],
             context=row["context"],
-            intent=CanonicalIntent(**json.loads(row["intent_json"])),
-            entities=[CanonicalEntity(**e) for e in json.loads(row["entities_json"])],
-            facts=[CanonicalFact(**f) for f in json.loads(row["facts_json"])],
-            claims=[CanonicalClaim(**c) for c in json.loads(row["claims_json"])],
-            events=[CanonicalEvent(**ev) for ev in json.loads(row["events_json"])],
-            data_points=[CanonicalDataPoint(**dp) for dp in json.loads(row["data_points_json"])],
-            recommendations=json.loads(row["recommendations_json"]),
-            references=[CanonicalReference(**r) for r in json.loads(row["references_json"])],
+            intent=CanonicalIntent(**parse_json(row["intent_json"], default={})),
+            entities=[CanonicalEntity(**e) for e in parse_json(row["entities_json"], default=[])],
+            facts=[CanonicalFact(**f) for f in parse_json(row["facts_json"], default=[])],
+            claims=[CanonicalClaim(**c) for c in parse_json(row["claims_json"], default=[])],
+            events=[CanonicalEvent(**ev) for ev in parse_json(row["events_json"], default=[])],
+            data_points=[CanonicalDataPoint(**dp) for dp in parse_json(row["data_points_json"], default=[])],
+            recommendations=parse_json(row["recommendations_json"], default=[]),
+            references=[CanonicalReference(**r) for r in parse_json(row["references_json"], default=[])],
             content_hash=row["content_hash"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            metadata=json.loads(row["metadata_json"]),
+            created_at=parse_dt(row["created_at"]),
+            metadata=parse_json(row["metadata_json"], default={}),
         )

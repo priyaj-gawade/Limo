@@ -1,17 +1,31 @@
 # Limo Backend - Pinned Core Dependencies
 fastapi==0.115.8
 uvicorn[standard]==0.34.0
-pydantic==2.10.6
+pydantic==2.13.5
 pydantic-settings==2.7.1
 python-multipart==0.0.20
+python-dotenv==1.2.3
+
+# PostgreSQL Driver for Web Surface (Psycopg 3)
+psycopg[binary]==3.3.6
 
 # Pinned Development & Testing Dependencies
 pytest==8.3.4
 pytest-asyncio==0.25.3
 httpx==0.28.1
 
+# Real-time Events
+sse-starlette==3.4.11
+
 # Web Search & Discovery
 ddgs==9.16.0
+google-auth==2.58.0
+google-genai==2.22.0
+
+# Direct Web Scraping & Dynamic Crawling (D5 & D8.9)
+trafilatura==2.2.0
+playwright==1.63.0
+Crawl4AI==0.9.3
 
 # Document & Media Extraction (D5)
 python-docx==1.2.0

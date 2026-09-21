@@ -54,7 +54,9 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
 
-    # Storage boundaries
+    # Storage & Surface Boundaries
+    limo_surface: str = "desktop"  # "desktop" or "web"
+    database_url: Optional[str] = None
     data_dir: str = "data"
     db_name: str = "limo.db"
 
@@ -62,6 +64,27 @@ class Settings(BaseSettings):
     def db_path(self) -> Path:
         """Resolve full filesystem path to primary SQLite database."""
         return Path(self.data_dir) / self.db_name
+
+    @property
+    def database_engine(self) -> str:
+        """Resolve database engine type ('sqlite' or 'postgres')."""
+        if self.limo_surface.lower() == "web" or (self.database_url and "postgres" in self.database_url.lower()):
+            return "postgres"
+        return "sqlite"
+
+    # Web Authentication & OAuth
+    google_client_id: Optional[str] = None
+    google_client_secret: Optional[str] = None
+    google_redirect_uri: Optional[str] = None
+    frontend_url: str = "http://localhost:5190"
+    session_secret: str = "limo-insecure-session-secret-change-in-prod"
+    auth_cookie_name: str = "limo_session"
+    session_ttl_days: int = 30
+
+    # Turbo Worker Offload Architecture
+    worker_token: Optional[str] = None
+    turbo_worker_url: Optional[str] = None
+    heavy_worker_timeout_sec: int = 300
 
     # CORS origins for local desktop/Electron environment
     cors_origins: Union[List[str], str] = [

@@ -1,4 +1,5 @@
 import inspect
+import logging
 import mimetypes
 import os
 from pathlib import Path
@@ -6,9 +7,11 @@ import re
 import subprocess
 import tempfile
 from typing import Any, Dict, Generator, List, Optional
-from fastapi import APIRouter, Depends, Header, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger("limo.api.artifacts")
 
 from ...auth.config import auth_config
 from ...auth.dependencies import authorize_resource, get_current_user
@@ -255,6 +258,61 @@ async def stream_artifact(
     """Stream deliverable with HTTP 206 Partial Content Range support for smooth seeking."""
     artifact = artifact_service.get_artifact(artifact_id)
     _authorize_artifact(artifact, current_user)
+
+    from ...storage.boundary import is_worker_artifact_ref, parse_worker_artifact_id
+    import httpx
+
+    # 1. Heavy worker deliverable via Cloudflare Named Tunnel
+    if is_worker_artifact_ref(artifact.storage_ref):
+        worker_art_id = parse_worker_artifact_id(artifact.storage_ref)
+        worker_base = os.getenv("TURBO_WORKER_URL") or "http://localhost:8005"
+        worker_token = os.getenv("WORKER_AUTH_TOKEN") or "limo-turbo-worker-secret-key-12345"
+
+        worker_url = f"{worker_base.rstrip('/')}/artifacts/{worker_art_id}"
+        req_headers = {"X-Limo-Worker-Key": worker_token}
+        if range_header:
+            req_headers["range"] = range_header
+
+        client = httpx.AsyncClient(timeout=30.0)
+        try:
+            req = client.build_request("GET", worker_url, headers=req_headers)
+            r = await client.send(req, stream=True)
+
+            if r.status_code not in (200, 206):
+                await r.aclose()
+                await client.aclose()
+                raise HTTPException(
+                    status_code=r.status_code,
+                    detail="Failed to stream artifact from worker",
+                )
+
+            async def stream_content():
+                try:
+                    async for chunk in r.aiter_bytes(chunk_size=64 * 1024):
+                        yield chunk
+                finally:
+                    await r.aclose()
+                    await client.aclose()
+
+            resp_headers = {}
+            for h in ("content-range", "accept-ranges", "content-length", "content-type"):
+                if h in r.headers:
+                    resp_headers[h] = r.headers[h]
+
+            return StreamingResponse(
+                stream_content(),
+                status_code=r.status_code,
+                headers=resp_headers,
+            )
+        except httpx.RequestError as exc:
+            await client.aclose()
+            logger.error("Turbo Worker stream connection error: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Turbo Worker is offline or unreachable",
+            )
+
+    # 2. Local desktop artifact fallback
     try:
         file_path = artifact_service.storage.safe_resolve(artifact.storage_ref)
     except Exception:
@@ -481,3 +539,5 @@ async def get_provenance(
     artifact = artifact_service.get_artifact(artifact_id)
     _authorize_artifact(artifact, current_user)
     return artifact_service.get_provenance(artifact_id)
+
+

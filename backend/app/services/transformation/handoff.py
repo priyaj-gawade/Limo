@@ -297,7 +297,15 @@ class JobArtifactHandoffService:
             return False
 
         # 2. Assert physical storage integrity for every linked artifact
+        from ...storage.boundary import is_worker_artifact_ref
+
         for art in artifacts:
+            if is_worker_artifact_ref(art.storage_ref):
+                if not art.content_hash or len(art.content_hash) != 64 or art.size_bytes <= 0:
+                    logger.error("Worker artifact metadata invalid: %s (%s)", art.id, art.storage_ref)
+                    return False
+                continue
+
             if not self.storage.file_exists(art.storage_ref):
                 logger.error("Artifact file missing on disk: %s (%s)", art.id, art.storage_ref)
                 return False
