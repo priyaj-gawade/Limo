@@ -88,6 +88,11 @@ class Settings(BaseSettings):
     turbo_worker_url: Optional[str] = None
     heavy_worker_timeout_sec: int = 300
 
+    # GitHub Actions Cloud Rendering Settings
+    github_pat: Optional[str] = None
+    github_repo: str = "priyaj-gawade/Limo"
+    public_backend_url: str = "https://api.limo-ai.online"
+
     # CORS origins for local desktop/Electron environment
     cors_origins: Union[List[str], str] = [
         "http://localhost:5190",

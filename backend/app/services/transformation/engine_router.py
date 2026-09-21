@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from ...exceptions import UnimplementedEngineError, UnsupportedFormatError
 from ...models.artifact import Artifact
 from ...models.content import CanonicalContent
-from ...models.enums import OutputFormat
+from ...models.enums import ArtifactType, OutputFormat, ValidationStatus
 from ...models.generation_config import GenerationConfig
 from ...models.generation_contracts import GenOfficePayload, VideoEnginePayload
 from ...models.transformation import EngineRoute, EngineType, PlannedDeliverable
@@ -211,6 +211,51 @@ class EngineRouter:
             worker_url = os.getenv("TURBO_WORKER_URL")
 
             if is_heavy and (auth_config.is_web_surface or worker_url):
+                # 1. Primary Cloud Path: GitHub Actions On-Demand Dispatcher
+                from .github_dispatcher import github_actions_dispatcher
+                if github_actions_dispatcher.is_configured():
+                    import uuid
+                    resolved_job_id = job_id or f"job_{uuid.uuid4().hex[:12]}"
+                    artifact_id = f"art_gh_{uuid.uuid4().hex[:12]}"
+                    execution_id = f"exec_{uuid.uuid4().hex[:12]}"
+                    format_str = "video" if deliverable.format == OutputFormat.VIDEO else "infographic"
+
+                    opts = deliverable.options or {}
+                    aspect_ratio = opts.get("aspect_ratio", "3:4")
+                    user_directive = opts.get("user_directive") or (canonical.intent.core_narrative if canonical and canonical.intent else "")
+
+                    dispatched = github_actions_dispatcher.dispatch_render_job(
+                        job_id=resolved_job_id,
+                        execution_id=execution_id,
+                        attempt=1,
+                        target_format=format_str,
+                        artifact_id=artifact_id,
+                        title=deliverable.title,
+                        directive=user_directive,
+                        aspect_ratio=aspect_ratio,
+                    )
+                    if dispatched:
+                        if progress_callback:
+                            progress_callback("github_dispatch", "Dispatched on-demand cloud render to GitHub Actions")
+                        return Artifact(
+                            id=artifact_id,
+                            title=deliverable.title,
+                            artifact_type=ArtifactType.VIDEO if deliverable.format == OutputFormat.VIDEO else ArtifactType.INFOGRAPHIC,
+                            file_format=".mp4" if deliverable.format == OutputFormat.VIDEO else ".png",
+                            storage_ref=f"worker://{artifact_id}",
+                            size_bytes=0,
+                            project_id=project_id,
+                            job_id=resolved_job_id,
+                            validation_status=ValidationStatus.VALID,
+                            metadata={
+                                "deliverable_id": deliverable.deliverable_id,
+                                "rendered_by": "github_actions",
+                                "execution_id": execution_id,
+                                "format": deliverable.format.value,
+                            },
+                        )
+
+                # 2. Secondary Cloud Path: Local Turbo Worker Tunnel
                 try:
                     return self._dispatch_turbo_worker(
                         deliverable=deliverable,

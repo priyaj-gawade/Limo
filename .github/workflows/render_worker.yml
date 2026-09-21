@@ -1,0 +1,83 @@
+name: Limo Cloud Render Worker
+
+on:
+  repository_dispatch:
+    types: [render_deliverable]
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Limo Job ID'
+        required: true
+        default: 'job_test'
+      execution_id:
+        description: 'Execution ID'
+        required: true
+        default: 'exec_test'
+      target_format:
+        description: 'Target format (infographic or video)'
+        required: true
+        default: 'infographic'
+      callback_url:
+        description: 'Backend Callback URL'
+        required: false
+        default: 'https://api.limo-ai.online/api/v1/jobs/callback'
+
+concurrency:
+  group: limo-render-${{ github.event.client_payload.execution_id || github.event.inputs.execution_id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install System & FFmpeg Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg fonts-liberation fonts-noto-cjk
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install httpx pydantic google-genai trafilatura
+
+      - name: Install Prismo Engine Dependencies
+        if: ${{ github.event.client_payload.target_format == 'infographic' || github.event.inputs.target_format == 'infographic' }}
+        working-directory: engines/prismo
+        run: |
+          if [ -f package.json ]; then
+            npm ci --ignore-scripts || npm install
+            npx playwright install chromium --with-deps || true
+          fi
+
+      - name: Execute Cloud Deliverable Render
+        id: execute_render
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          WORKER_AUTH_TOKEN: ${{ secrets.WORKER_AUTH_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_KEY_1 || secrets.GEMINI_API_KEY }}
+          PAYLOAD_JSON: ${{ toJson(github.event.client_payload || github.event.inputs) }}
+        run: |
+          python backend/worker/github_worker_runner.py
+
+      - name: Cleanup Runner Resources
+        if: always()
+        run: |
+          echo "Cleaning up temporary media, caches, and scratch files..."
+          rm -rf data/worker_artifacts data/prismo-workspace /tmp/limo_* || true
+          rm -rf ~/.cache/ms-playwright || true
