@@ -151,9 +151,11 @@ export function getEngineConfig(explicitEnvPath?: string): EngineConfig {
   ].filter((k): k is string => Boolean(k && k.trim().length > 0));
 
   const unsplashKeys = [
+    env.UNSPLASH_ACCESS_KEY,
     env.UNSPLASH_KEY_1,
     env.UNSPLASH_KEY_2,
-    process.env.UNSPLASH_ACCESS_KEY
+    process.env.UNSPLASH_ACCESS_KEY,
+    process.env.UNSPLASH_KEY_1
   ].filter((k): k is string => Boolean(k && k.trim().length > 0));
 
   const port = parseInt(process.env.D8_PORT || env.D8_PORT || '5180', 10);
