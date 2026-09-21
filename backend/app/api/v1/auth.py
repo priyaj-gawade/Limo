@@ -1,10 +1,11 @@
 """Authentication REST API router exposing Google OAuth and session lifecycle."""
 
+import json
 import logging
 import secrets
 from typing import Optional
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ...auth.config import auth_config
 from ...auth.dependencies import get_current_user
@@ -22,22 +23,17 @@ async def login(response: Response):
     state = secrets.token_urlsafe(16)
     auth_url = auth_service.generate_auth_url(state=state)
 
-    response.set_cookie(
-        key="oauth_state",
-        value=state,
-        httponly=True,
-        samesite="lax",
-        max_age=600,
-        secure=auth_config.is_web_surface,
-    )
-    response.set_cookie(
-        key="limo_oauth_state",
-        value=state,
-        httponly=True,
-        samesite="lax",
-        max_age=600,
-        secure=auth_config.is_web_surface,
-    )
+    cookie_kwargs = {
+        "httponly": True,
+        "samesite": "lax",
+        "max_age": 600,
+        "secure": auth_config.is_web_surface,
+    }
+    if auth_config.cookie_domain:
+        cookie_kwargs["domain"] = auth_config.cookie_domain
+
+    response.set_cookie(key="oauth_state", value=state, **cookie_kwargs)
+    response.set_cookie(key="limo_oauth_state", value=state, **cookie_kwargs)
     return {
         "authorization_url": auth_url,
         "state": state,
@@ -125,16 +121,23 @@ async def callback(
     expected_state = oauth_state or limo_oauth_state
     user, session_token = await _process_oauth_callback(code, state, expected_state)
 
+    session_cookie_kwargs = {
+        "httponly": True,
+        "samesite": "lax",
+        "max_age": 60 * 60 * 24 * auth_config.session_expiry_days,
+        "secure": auth_config.is_web_surface,
+    }
+    if auth_config.cookie_domain:
+        session_cookie_kwargs["domain"] = auth_config.cookie_domain
+
     response.set_cookie(
         key="limo_session",
         value=session_token,
-        httponly=True,
-        samesite="lax",
-        max_age=60 * 60 * 24 * auth_config.session_expiry_days,
-        secure=auth_config.is_web_surface,
+        **session_cookie_kwargs,
     )
-    response.delete_cookie("oauth_state")
-    response.delete_cookie("limo_oauth_state")
+    del_kwargs = {"domain": auth_config.cookie_domain} if auth_config.cookie_domain else {}
+    response.delete_cookie("oauth_state", **del_kwargs)
+    response.delete_cookie("limo_oauth_state", **del_kwargs)
     return user
 
 
@@ -147,22 +150,109 @@ async def google_callback(
     oauth_state: Optional[str] = Cookie(None),
     limo_oauth_state: Optional[str] = Cookie(None),
 ):
-    """Handle Google OAuth redirect, establish session, and redirect to frontend."""
+    """Handle Google OAuth redirect, establish session, and notify frontend popup or redirect."""
     expected_state = limo_oauth_state or oauth_state
-    user, session_token = await _process_oauth_callback(code, state, expected_state)
+    try:
+        user, session_token = await _process_oauth_callback(code, state, expected_state)
+    except Exception as e:
+        logger.error("OAuth callback processing error: %s", e)
+        error_msg = str(getattr(e, "detail", e))
+        error_html = f"""<!DOCTYPE html>
+<html>
+<head><title>Authentication Failed</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; text-align: center; padding: 2rem; background: #0f1117; color: #ef4444;">
+  <h3>Sign-in Failed</h3>
+  <p>{error_msg}</p>
+  <script>
+    if (window.opener) {{
+      try {{
+        window.opener.postMessage({{ type: 'LIMO_AUTH_ERROR', error: {json.dumps(error_msg)} }}, '*');
+      }} catch(err) {{}}
+      setTimeout(() => {{ window.close(); }}, 2500);
+    }}
+  </script>
+</body>
+</html>"""
+        return HTMLResponse(content=error_html, status_code=status.HTTP_400_BAD_REQUEST)
 
-    redirect_dest = auth_config.frontend_url or "http://localhost:5190"
-    resp = RedirectResponse(url=redirect_dest, status_code=status.HTTP_303_SEE_OTHER)
-    resp.set_cookie(
-        key="limo_session",
-        value=session_token,
-        httponly=True,
-        samesite="lax",
-        max_age=60 * 60 * 24 * auth_config.session_expiry_days,
-        secure=auth_config.is_web_surface,
-    )
-    resp.delete_cookie("limo_oauth_state")
-    resp.delete_cookie("oauth_state")
+    redirect_dest = auth_config.frontend_url or "https://app.limo-ai.online"
+
+    session_cookie_kwargs = {
+        "httponly": True,
+        "samesite": "lax",
+        "max_age": 60 * 60 * 24 * auth_config.session_expiry_days,
+        "secure": auth_config.is_web_surface,
+    }
+    if auth_config.cookie_domain:
+        session_cookie_kwargs["domain"] = auth_config.cookie_domain
+
+    user_dict = {
+        "id": user.id,
+        "email": user.email,
+        "display_name": user.display_name,
+        "avatar_url": user.avatar_url,
+        "provider": user.provider,
+        "created_at": user.created_at.isoformat() if hasattr(user.created_at, "isoformat") else str(user.created_at),
+    }
+
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+  <title>Limo Authentication</title>
+  <style>
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      background: #0f1117;
+      color: #e2e8f0;
+    }}
+    .box {{
+      text-align: center;
+      padding: 2rem;
+    }}
+    .spinner {{
+      width: 36px;
+      height: 36px;
+      margin: 0 auto 1rem;
+      border: 3px solid rgba(255,255,255,0.1);
+      border-top-color: #38bdf8;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="spinner"></div>
+    <h3 style="margin-bottom: 0.5rem;">Authentication Successful</h3>
+    <p style="color: #94a3b8; font-size: 0.9rem;">Finalizing sign-in, closing window...</p>
+  </div>
+  <script>
+    const authedUser = {json.dumps(user_dict)};
+    if (window.opener) {{
+      try {{
+        window.opener.postMessage({{ type: 'LIMO_AUTH_SUCCESS', user: authedUser }}, '*');
+      }} catch (err) {{
+        console.error('postMessage error:', err);
+      }}
+      setTimeout(() => {{ window.close(); }}, 300);
+    }} else {{
+      window.location.href = "{redirect_dest}";
+    }}
+  </script>
+</body>
+</html>"""
+
+    resp = HTMLResponse(content=html_content, status_code=status.HTTP_200_OK)
+    resp.set_cookie(key="limo_session", value=session_token, **session_cookie_kwargs)
+    del_kwargs = {"domain": auth_config.cookie_domain} if auth_config.cookie_domain else {}
+    resp.delete_cookie("limo_oauth_state", **del_kwargs)
+    resp.delete_cookie("oauth_state", **del_kwargs)
     return resp
 
 
@@ -181,5 +271,6 @@ async def logout(
     if limo_session:
         auth_service.invalidate_session(limo_session)
 
-    response.delete_cookie("limo_session")
+    del_kwargs = {"domain": auth_config.cookie_domain} if auth_config.cookie_domain else {}
+    response.delete_cookie("limo_session", **del_kwargs)
     return {"status": "logged_out", "message": "Session invalidated successfully"}

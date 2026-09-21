@@ -18,6 +18,7 @@ class AuthConfig(BaseModel):
     google_client_secret: Optional[str] = None
     google_redirect_uri: str = "http://localhost:8000/api/v1/auth/google/callback"
     frontend_url: str = "http://localhost:5190"
+    cookie_domain: Optional[str] = None
     session_expiry_days: int = 7
 
     @property
@@ -61,6 +62,7 @@ def load_auth_config(repo_root: Optional[Path] = None) -> AuthConfig:
     client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
     redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/api/v1/auth/google/callback")
     frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5190")
+    cookie_domain = os.getenv("COOKIE_DOMAIN")
 
     # Fallback to credentials/google_auth.json if environment variables are not set
     if not client_id or not client_secret:
@@ -84,6 +86,7 @@ def load_auth_config(repo_root: Optional[Path] = None) -> AuthConfig:
         google_client_secret=client_secret,
         google_redirect_uri=redirect_uri,
         frontend_url=frontend_url,
+        cookie_domain=cookie_domain,
     )
 
     # Fail-closed enforcement on web surface
