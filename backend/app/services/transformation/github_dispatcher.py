@@ -77,6 +77,9 @@ class GitHubActionsDispatcher:
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
+        # GitHub repository_dispatch limits client_payload to 10 top-level keys.
+        # fetch_url/callback_url/upload_url are derived by the worker from
+        # backend_url + job_id, so we omit them here to stay within the limit.
         client_payload = {
             "job_id": job_id,
             "execution_id": execution_id,
@@ -86,9 +89,6 @@ class GitHubActionsDispatcher:
             "title": title or "Deliverable Render",
             "aspect_ratio": aspect_ratio or "3:4",
             "backend_url": self.backend_url,
-            "fetch_url": f"{self.backend_url}/api/v1/jobs/{job_id}/context",
-            "callback_url": f"{self.backend_url}/api/v1/jobs/{job_id}/callback",
-            "upload_url": f"{self.backend_url}/api/v1/jobs/{job_id}/upload",
         }
 
         req_body = {
