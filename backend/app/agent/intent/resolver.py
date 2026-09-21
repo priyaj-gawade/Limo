@@ -257,7 +257,7 @@ class IntentResolver:
             flags=re.IGNORECASE,
         ).strip()
         clean_search_query = re.sub(
-            r"^(?:please\s+)?(?:search(?:\s+the)?\s+(?:web|internet|google)(?:\s+for)?|look\s+up\s+online(?:\s+for)?|browse\s+the\s+web\s+for|what\s+is\s+the\s+latest|what\s+are\s+the\s+latest|tell\s+me\s+about\s+the\s+latest|summarize\s+(?:the\s+latest\s+)?|find\s+out\s+(?:about\s+)?)\s*",
+            r"^(?:please\s+)?(?:find(?:\s+(?:me|some|out))?|search(?:\s+the)?(?:\s+(?:web|internet|google))?(?:\s+for)?|look\s+up(?:\s+online)?(?:\s+for)?|browse\s+the\s+web\s+for|what\s+(?:is|are)\s+the\s+latest|tell\s+me\s+about(?:\s+the\s+latest)?|give\s+me\s+(?:some\s+)?|get\s+(?:me\s+)?(?:some\s+)?|summarize\s+(?:the\s+latest\s+)?)\s*",
             "",
             clean_search_query,
             flags=re.IGNORECASE,
@@ -276,14 +276,14 @@ class IntentResolver:
 
         is_explicit_web_search = bool(
             re.search(
-                r"\b(?:search(?:\s+the)?\s+(?:web|internet|google)|look\s+up\s+online|browse\s+the\s+web)\b",
+                r"\b(?:search(?:\s+the)?\s+(?:web|internet|google|online)|look\s+up\s+online|browse\s+the\s+web|(?:find|search|get|show)\s+(?:me\s+)?(?:some\s+)?(?:news|articles|info|information|developments))\b",
                 prompt,
                 re.I,
             )
         )
         is_temporal = bool(
             re.search(
-                r"\b(?:latest|recent|today's|breaking\s+news|current\s+(?:events?|price|status|developments|news|market)|news\s+(?:about|on|today)|developments\s+in|who\s+won|stock\s+price|weather\s+in|what\s+happened\s+(?:today|recently)|happening\s+today)\b",
+                r"\b(?:latest|recent|today(?:'s|s)?|breaking\s+news|current\s+(?:events?|price|status|developments|news|market)|news(?:\s+(?:about|on|today|todays))?|developments\s+in|who\s+won|stock\s+price|weather\s+in|what\s+happened\s+(?:today|recently)|happening\s+today|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\b",
                 prompt,
                 re.I,
             )
@@ -370,14 +370,14 @@ class IntentResolver:
 
         is_explicit_web_search = bool(
             re.search(
-                r"\b(?:search(?:\s+the)?\s+(?:web|internet|google)|look\s+up\s+online|browse\s+the\s+web)\b",
+                r"\b(?:search(?:\s+the)?\s+(?:web|internet|google|online)|look\s+up\s+online|browse\s+the\s+web|(?:find|search|get|show)\s+(?:me\s+)?(?:some\s+)?(?:news|articles|info|information|developments))\b",
                 prompt,
                 re.I,
             )
         )
         is_temporal = bool(
             re.search(
-                r"\b(?:latest|recent|today's|breaking\s+news|current\s+(?:events?|price|status|developments|news|market)|news\s+(?:about|on|today)|developments\s+in|who\s+won|stock\s+price|weather\s+in|what\s+happened\s+(?:today|recently)|happening\s+today)\b",
+                r"\b(?:latest|recent|today(?:'s|s)?|breaking\s+news|current\s+(?:events?|price|status|developments|news|market)|news(?:\s+(?:about|on|today|todays))?|developments\s+in|who\s+won|stock\s+price|weather\s+in|what\s+happened\s+(?:today|recently)|happening\s+today|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\b",
                 prompt,
                 re.I,
             )
@@ -385,7 +385,7 @@ class IntentResolver:
         needs_search = (is_explicit_web_search or is_temporal) and not is_pasted_article
 
         clean_search_query = re.sub(
-            r"^(?:please\s+)?(?:search(?:\s+the)?\s+(?:web|internet|google)(?:\s+for)?|look\s+up\s+online(?:\s+for)?|browse\s+the\s+web\s+for|what\s+is\s+the\s+latest|what\s+are\s+the\s+latest|tell\s+me\s+about\s+the\s+latest|summarize\s+(?:the\s+latest\s+)?|find\s+out\s+(?:about\s+)?)\s*",
+            r"^(?:please\s+)?(?:find(?:\s+(?:me|some|out))?|search(?:\s+the)?(?:\s+(?:web|internet|google))?(?:\s+for)?|look\s+up(?:\s+online)?(?:\s+for)?|browse\s+the\s+web\s+for|what\s+(?:is|are)\s+the\s+latest|tell\s+me\s+about(?:\s+the\s+latest)?|give\s+me\s+(?:some\s+)?|get\s+(?:me\s+)?(?:some\s+)?|summarize\s+(?:the\s+latest\s+)?)\s*",
             "",
             prompt,
             flags=re.IGNORECASE,

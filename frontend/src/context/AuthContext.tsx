@@ -38,8 +38,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       if (res.ok) {
         const data: User = await res.json();
-        // A user is fully authenticated if provider === 'google'
-        if (data && data.provider === 'google') {
+        // A user is fully authenticated if provider is 'google' or 'desktop'
+        if (data && (data.provider === 'google' || data.provider === 'desktop')) {
           setUser(data);
           setIsLoginModalOpen(false);
           return;
@@ -203,8 +203,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // True if user is logged in with a real Google account
-  const isAuthenticated = Boolean(user && user.provider === 'google');
+  // True if user is logged in with a real Google account or running on local desktop surface
+  const isAuthenticated = Boolean(user && (user.provider === 'google' || user.provider === 'desktop'));
 
   return (
     <AuthContext.Provider

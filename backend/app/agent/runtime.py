@@ -47,6 +47,7 @@ from .context import (
     SelectedContext,
     UnifiedInputContext,
 )
+from .actions import ActionType
 from .contracts import BaseTool
 from .intent import (
     ConfidenceLevel,
@@ -445,6 +446,16 @@ class LimoAgentRuntime:
                     canonicalize=bool(resolution.target_format),
                     timelimit=search_timelimit,
                 )
+                if not research_res.get("provenance") and search_timelimit:
+                    logger.info("Retrying web research for '%s' without timelimit filter", search_query)
+                    research_res = await web_research_service.research(
+                        query=search_query,
+                        max_sources=3,
+                        project_id=project_id,
+                        scrape_content=True,
+                        canonicalize=bool(resolution.target_format),
+                        timelimit=None,
+                    )
                 if context.unified_input:
                     for p_data in research_res.get("provenance", []):
                         context.unified_input.web_sources.append(WebSourceProvenance(**p_data))

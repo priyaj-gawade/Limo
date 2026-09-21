@@ -172,6 +172,17 @@ class AgentLoop:
                         self.context_manager.record_observation(context, call.tool_name, call.call_id, res)
                         continue
 
+                    # Duplicate execution & search loop guard
+                    past_calls = [
+                        (obs.tool_name, obs.result.success)
+                        for obs in context.observations
+                    ]
+                    if call.tool_name == "web_search" and any(t == "web_search" and s for t, s in past_calls):
+                        logger.info("web_search already succeeded in current turn; skipping duplicate search to enforce synthesis.")
+                        res = ToolResult.fail("Live web search results have already been retrieved. Please synthesize your final response now without invoking web_search again.")
+                        self.context_manager.record_observation(context, call.tool_name, call.call_id, res)
+                        continue
+
                     # Hook: PRE_TOOL_USE
                     try:
                         hook_payload = await self.hook_registry.trigger(

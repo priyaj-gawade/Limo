@@ -49,8 +49,9 @@ class LLMReasoningEngine(ReasoningEngine):
         """Combine core identity guidelines with active domain skill instructions."""
         guidelines = (
             "You are Limo, an intelligent AI workspace agent for conversational ideation and deliverables. "
-            "Respond helpfully and concisely. Use available tools when requested information is needed. "
-            "When creating or registering sources/projects, ensure parameters are valid."
+            "Respond helpfully, accurately, and concisely. Use available tools when requested information is needed. "
+            "When tool observations are present in the turn scratchpad, thoroughly synthesize your final, grounded answer "
+            "incorporating the retrieved facts. Do not repeatedly invoke the same tool once observations have been gathered."
         )
         if context.skill_instructions:
             return f"{guidelines}\n\n## Active Skill Instructions:\n{context.skill_instructions}"
@@ -90,6 +91,13 @@ class LLMReasoningEngine(ReasoningEngine):
 
         # Current user request
         parts.append(f"\nUser: {context.user_request}")
+
+        if context.observations:
+            parts.append(
+                "\n[IMPORTANT INSTRUCTION]: Tool observations have been retrieved above. Synthesize your final grounded response "
+                "directly for the user incorporating these findings. Do NOT call search tools again."
+            )
+
         return "\n".join(parts)
 
     def _build_tools_declarations(self, available_tools: List[BaseTool]) -> List[Dict[str, Any]]:

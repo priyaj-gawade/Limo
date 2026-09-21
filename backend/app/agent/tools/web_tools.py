@@ -41,7 +41,7 @@ class WebSearchTool(BaseTool):
         "Search the live web for recent information, facts, articles, and current events. "
         "Returns verified search result snippets with URLs and domains. Never returns mock data."
     )
-    permission_type: PermissionType = PermissionType.EXTERNAL_DISPATCH
+    permission_type: PermissionType = PermissionType.READ
 
     def __init__(self, client: Optional[WebSearchClient] = None) -> None:
         self.client = client or get_default_search_client()
@@ -101,7 +101,7 @@ class YouTubeSearchTool(BaseTool):
         "Returns titles, creators, watch URLs, and thumbnail previews. "
         "Optionally retrieves grounded video transcripts (with zero hallucination)."
     )
-    permission_type: PermissionType = PermissionType.EXTERNAL_DISPATCH
+    permission_type: PermissionType = PermissionType.READ
 
     def __init__(self, client: Optional[YouTubeSearchClient] = None) -> None:
         self.client = client or youtube_search_client
@@ -151,7 +151,7 @@ class ScrapeUrlTool(BaseTool):
         "Uses Trafilatura with dynamic Crawl4AI fallback and SSRF safety. "
         "Strictly reports whether content was extracted via 'trafilatura', 'crawl4ai', or 'fallback'."
     )
-    permission_type: PermissionType = PermissionType.EXTERNAL_DISPATCH
+    permission_type: PermissionType = PermissionType.READ
 
     def __init__(self, client: Optional[WebContentClient] = None) -> None:
         self.client = client or web_content_client
@@ -204,7 +204,7 @@ class ResearchWebSourcesTool(BaseTool):
         "Discovers sources across unique domains, scrapes full article content, "
         "ingests into Limo D5 source repository, and anchors provenance for deliverables."
     )
-    permission_type: PermissionType = PermissionType.EXTERNAL_DISPATCH
+    permission_type: PermissionType = PermissionType.READ
 
     def __init__(self, service: Optional[WebResearchService] = None) -> None:
         self.service = service or web_research_service

@@ -41,8 +41,8 @@ class AuthConfig(BaseModel):
 
     @property
     def is_auth_required(self) -> bool:
-        """Authentication is required if on web surface OR if Google OAuth is configured."""
-        return self.is_web_surface or self.has_oauth_configured
+        """Authentication is strictly required only on the hosted web surface."""
+        return self.is_web_surface
 
     def validate_surface_requirements(self) -> None:
         """Enforce fail-closed requirement for web surface."""
