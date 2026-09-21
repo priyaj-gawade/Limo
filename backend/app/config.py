@@ -102,14 +102,14 @@ class Settings(BaseSettings):
 
     @property
     def resolved_worker_token(self) -> Optional[str]:
-        """Resolve worker auth token from worker_auth_token or worker_token."""
-        token = (self.worker_auth_token or self.worker_token or "").strip()
+        """Resolve worker auth token from worker_auth_token, worker_token, or session_secret."""
+        token = (self.worker_auth_token or self.worker_token or self.session_secret or "").strip()
         return token if token else None
 
     def validate_worker_security(self) -> None:
         """Enforce fail-closed worker authentication policy in web mode."""
         if self.limo_surface.lower() == "web":
-            if not (self.worker_auth_token or self.worker_token):
+            if not self.resolved_worker_token:
                 raise ValueError(
                     "WORKER_AUTH_TOKEN is strictly mandatory when LIMO_SURFACE=web. "
                     "Worker endpoints must fail closed. No anonymous fallback allowed."
