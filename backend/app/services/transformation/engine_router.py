@@ -211,15 +211,36 @@ class EngineRouter:
             worker_url = os.getenv("TURBO_WORKER_URL")
 
             if is_heavy and (auth_config.is_web_surface or worker_url):
-                return self._dispatch_turbo_worker(
-                    deliverable=deliverable,
-                    canonical=canonical,
-                    config=config,
-                    project_id=project_id,
-                    job_id=job_id,
-                    unified_input=unified_input,
-                    progress_callback=progress_callback,
-                )
+                try:
+                    return self._dispatch_turbo_worker(
+                        deliverable=deliverable,
+                        canonical=canonical,
+                        config=config,
+                        project_id=project_id,
+                        job_id=job_id,
+                        unified_input=unified_input,
+                        progress_callback=progress_callback,
+                    )
+                except Exception as exc:
+                    logger.warning("Turbo worker dispatch failed: %s. Checking for native adapter fallback.", exc)
+                    adapter = self.get_native_adapter(deliverable.format)
+                    is_avail = False
+                    if hasattr(adapter, "client") and hasattr(adapter.client, "is_available"):
+                        is_avail = adapter.client.is_available()
+
+                    if is_avail:
+                        logger.info("Falling back to native in-process adapter for format %s", deliverable.format)
+                        effective_config = config or GenerationConfig()
+                        return adapter.execute(
+                            canonical=canonical,
+                            deliverable=deliverable,
+                            config=effective_config,
+                            project_id=project_id,
+                            job_id=job_id,
+                            unified_input=unified_input,
+                            progress_callback=progress_callback,
+                        )
+                    raise
 
             adapter = self.get_native_adapter(deliverable.format)
             effective_config = config or GenerationConfig()
@@ -313,7 +334,12 @@ class EngineRouter:
 
         if res.status_code != 200:
             logger.error("Turbo Worker execution failed (%d): %s", res.status_code, res.text)
-            raise BadRequestError(f"Turbo Worker execution failed with status {res.status_code}")
+            if res.status_code == 530:
+                raise BadRequestError(
+                    f"Turbo Worker Cloudflare Tunnel is offline (HTTP 530 at {worker_url}). "
+                    "Please start the local Turbo Worker and Cloudflare Tunnel using .\\start-worker.ps1."
+                )
+            raise BadRequestError(f"Turbo Worker execution failed with status {res.status_code}: {res.text[:200]}")
 
         data = res.json()
         storage_ref = data.get("artifact_ref", f"worker://{artifact_id}")

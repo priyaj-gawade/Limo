@@ -75,6 +75,17 @@ def create_app() -> FastAPI:
     # Mount API routers
     app.include_router(api_v1_router, prefix="/api")
 
+    @app.get("/")
+    @app.head("/")
+    async def root():
+        """Root probe confirming backend is operational."""
+        return {
+            "status": "healthy",
+            "app": settings.app_name,
+            "version": settings.app_version,
+            "docs": "/docs" if settings.is_development else None,
+        }
+
     return app
 
 

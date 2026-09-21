@@ -1,0 +1,7 @@
+tunnel: a011af07-ffd7-469b-9ecf-0d821a86e215
+credentials-file: C:\Users\Admin\.cloudflared\a011af07-ffd7-469b-9ecf-0d821a86e215.json
+
+ingress:
+  - hostname: turbo.limo-ai.online
+    service: http://127.0.0.1:8005
+  - service: http_status:404

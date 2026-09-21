@@ -119,7 +119,7 @@ class WebResearchService:
         bounded_max = max(1, min(max_sources, MAX_RESEARCH_SOURCES))
         start_time = datetime.now(timezone.utc)
 
-        # 1. Execute Web Search
+        # 1. Execute Web Search with Multi-Provider Cascade
         try:
             results = await self.search_client.search(
                 query=clean_query,
@@ -129,9 +129,27 @@ class WebResearchService:
             all_results = results if isinstance(results, list) else results.get("results", [])
             search_error = None
         except Exception as e:
-            logger.warning("Research search failed for '%s': %s", clean_query, e)
+            logger.warning("Primary research search failed for '%s': %s", clean_query, e)
             all_results = []
             search_error = str(e)
+
+        # Fallback to secondary provider if primary returned 0 results or errored
+        if not all_results:
+            try:
+                from .base import get_fallback_search_client
+                fallback_client = get_fallback_search_client(current_provider=getattr(self.search_client, "provider_name", "ddgs"))
+                if fallback_client:
+                    logger.info("Retrying web search for '%s' using fallback provider '%s'", clean_query, fallback_client.provider_name)
+                    fb_results = await fallback_client.search(
+                        query=clean_query,
+                        max_results=min(10, bounded_max * 3),
+                        timelimit=timelimit,
+                    )
+                    all_results = fb_results if isinstance(fb_results, list) else fb_results.get("results", [])
+                    if all_results:
+                        search_error = None
+            except Exception as fe:
+                logger.warning("Fallback search also failed for '%s': %s", clean_query, fe)
 
         if not all_results and search_error:
             return {

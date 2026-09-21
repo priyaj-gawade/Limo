@@ -104,7 +104,7 @@ class DDGSWebSearchClient:
                 from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
 
                 with DDGS(timeout=int(request_timeout)) as ddgs_instance:
-                    return ddgs_instance.text(
+                    res = ddgs_instance.text(
                         query=clean_query,
                         region=search_region,
                         safesearch="moderate",
@@ -112,6 +112,16 @@ class DDGSWebSearchClient:
                         max_results=num,
                         backend="auto",
                     )
+                    if not res and search_timelimit:
+                        res = ddgs_instance.text(
+                            query=clean_query,
+                            region=search_region,
+                            safesearch="moderate",
+                            timelimit=None,
+                            max_results=num,
+                            backend="auto",
+                        )
+                    return res or []
             except ImportError as ie:
                 logger.error("ddgs package is not installed: %s", ie)
                 raise DDGSWebSearchError("Search provider 'ddgs' is not installed.") from ie

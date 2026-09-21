@@ -257,7 +257,7 @@ class IntentResolver:
             flags=re.IGNORECASE,
         ).strip()
         clean_search_query = re.sub(
-            r"^(?:please\s+)?(?:find(?:\s+(?:me|some|out))?|search(?:\s+the)?(?:\s+(?:web|internet|google))?(?:\s+for)?|look\s+up(?:\s+online)?(?:\s+for)?|browse\s+the\s+web\s+for|what\s+(?:is|are)\s+the\s+latest|tell\s+me\s+about(?:\s+the\s+latest)?|give\s+me\s+(?:some\s+)?|get\s+(?:me\s+)?(?:some\s+)?|summarize\s+(?:the\s+latest\s+)?)\s*",
+            r"^(?:please\s+)?(?:find(?:\s+(?:me|us|some|out))?|search(?:\s+the)?(?:\s+(?:web|internet|google))?(?:\s+for)?|look\s+up(?:\s+online)?(?:\s+for)?|browse\s+the\s+web\s+for|what\s+(?:is|are|happened\s+with|happened\s+to)(?:\s+the)?(?:\s+latest)?|tell\s+(?:me|us)(?:\s+about)?(?:\s+the\s+latest)?(?:\s+today'?s)?|give\s+(?:me|us)\s+(?:some\s+)?|get\s+(?:me|us)\s+(?:some\s+)?|summarize\s+(?:the\s+latest\s+)?)\s*",
             "",
             clean_search_query,
             flags=re.IGNORECASE,
@@ -288,6 +288,16 @@ class IntentResolver:
                 re.I,
             )
         )
+        is_greeting_or_chat = bool(
+            re.search(
+                r"^\s*(?:hi|hello|hey|good\s+(?:morning|afternoon|evening|day)|howdy|how\s+are\s+you(?:\s+doing)?(?:\s+today)?|what'?s\s+up|sup)\b",
+                prompt.strip(),
+                re.I,
+            )
+        )
+        if is_greeting_or_chat and not is_explicit_web_search:
+            is_temporal = False
+
         is_yt = bool(
             youtube_urls or re.search(r"\b(?:youtube|videos?\s+on\s+youtube|youtube\s+videos?|youtube\s+channel)\b", prompt, re.I)
         )
@@ -382,6 +392,16 @@ class IntentResolver:
                 re.I,
             )
         )
+        is_greeting_or_chat = bool(
+            re.search(
+                r"^\s*(?:hi|hello|hey|good\s+(?:morning|afternoon|evening|day)|howdy|how\s+are\s+you(?:\s+doing)?(?:\s+today)?|what'?s\s+up|sup)\b",
+                prompt.strip(),
+                re.I,
+            )
+        )
+        if is_greeting_or_chat and not is_explicit_web_search:
+            is_temporal = False
+
         needs_search = (is_explicit_web_search or is_temporal) and not is_pasted_article
 
         clean_search_query = re.sub(

@@ -101,7 +101,7 @@ class YouTubeSearchTool(BaseTool):
         "Returns titles, creators, watch URLs, and thumbnail previews. "
         "Optionally retrieves grounded video transcripts (with zero hallucination)."
     )
-    permission_type: PermissionType = PermissionType.READ
+    permission_type: PermissionType = PermissionType.EXTERNAL_DISPATCH
 
     def __init__(self, client: Optional[YouTubeSearchClient] = None) -> None:
         self.client = client or youtube_search_client

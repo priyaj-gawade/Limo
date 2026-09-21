@@ -58,3 +58,18 @@ def get_default_search_client() -> WebSearchClient:
 
     from .ddgs_search import ddgs_search_client
     return ddgs_search_client
+
+
+def get_fallback_search_client(current_provider: str = "ddgs") -> Optional[WebSearchClient]:
+    """Resolve a secondary search client for automatic provider fallback."""
+    curr = current_provider.strip().lower()
+    if curr == "ddgs":
+        from .google_search import google_search_client
+        if google_search_client.is_configured():
+            return google_search_client
+    elif curr == "google":
+        from .ddgs_search import ddgs_search_client
+        if ddgs_search_client.is_available:
+            return ddgs_search_client
+    return None
+
