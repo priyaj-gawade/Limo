@@ -78,7 +78,7 @@ export class AssetProviderManager {
     }
 
     return {
-      provider: provider || 'pexels',
+      provider: provider || 'unsplash',
       query: query.query,
       total: 0,
       assets: []

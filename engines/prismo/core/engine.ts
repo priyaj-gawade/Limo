@@ -14,6 +14,7 @@ import type {
   TargetType
 } from './contracts/engine.ts';
 import type { ModelProvider } from './contracts/models.ts';
+import type { AssetProviderType } from './contracts/assets.ts';
 import { WorkspaceManager } from './workspace/workspace.ts';
 import { VersioningEngine } from './workspace/versioning.ts';
 import { GeminiProviderManager } from './providers/manager.ts';
@@ -37,6 +38,7 @@ export interface DesignEngineOptions {
   pexelsKeys?: string[];
   pixabayKeys?: string[];
   unsplashKeys?: string[];
+  preferredOrder?: AssetProviderType[];
   enablePreviewServer?: boolean;
   autoExportPng?: boolean;
   modelProvider?: ModelProvider;
@@ -81,7 +83,7 @@ export class StandaloneDesignEngine implements DesignEngine {
       pexelsKeys: options.pexelsKeys || [],
       pixabayKeys: options.pixabayKeys || [],
       unsplashKeys: options.unsplashKeys || [],
-      preferredOrder: ['unsplash', 'pexels', 'pixabay', 'local'],
+      preferredOrder: options.preferredOrder || ['unsplash', 'pexels', 'pixabay', 'local'],
       localAssetsDir: path.join(this.dataDir, 'assets')
     });
 

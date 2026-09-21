@@ -363,6 +363,7 @@ async function run() {
     pexelsKeys,
     pixabayKeys,
     unsplashKeys,
+    preferredOrder: ['unsplash', 'pexels', 'pixabay', 'local'],
     enablePreviewServer: false,
     autoExportPng: false
   });
