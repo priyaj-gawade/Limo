@@ -495,6 +495,8 @@ class LimoAgentRuntime:
                     context=context,
                     available_tools=[],
                 )
+                if decision.action_type == ActionType.ERROR:
+                    raise RuntimeError(decision.error or "LLM reasoning provider failure")
                 response_text = decision.response_text or "I have processed your request."
                 execution_summary = decision.execution_summary or "Fast conversational response (zero tool schema overhead)."
 
