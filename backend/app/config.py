@@ -31,12 +31,14 @@ class Settings(BaseSettings):
     gemini_key_1: Optional[str] = None
     gemini_key_2: Optional[str] = None
     gemini_key_3: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+    gemini_api_keys: Optional[str] = None
     primary_model: str = "gemini-3.5-flash-lite"
     fallback_models: List[str] = ["gemini-3.1-flash-lite"]
     llm_max_retries: int = 3
     llm_cooldown_duration_sec: float = 60.0
     llm_timeout_sec: float = 30.0
-    llm_safety_margin: float = 0.9
+    llm_safety_margin: float = 1.0
     default_retrieval_token_budget: int = 2000
 
     # Web & Internet Reach Configuration (Phase D8.9)

@@ -10,8 +10,8 @@ logger = logging.getLogger("limo.agent.llm.quota")
 
 # Initial observations from user's active quota charts (configurable and updateable, MUST-FIX #2)
 DEFAULT_MODEL_QUOTAS: Dict[str, ModelQuota] = {
-    "gemini-3.5-flash-lite": ModelQuota(rpm=15, tpm=250000, rpd=500, safety_margin=0.9),
-    "gemini-3.1-flash-lite": ModelQuota(rpm=15, tpm=250000, rpd=500, safety_margin=0.9),
+    "gemini-3.5-flash-lite": ModelQuota(rpm=15, tpm=250000, rpd=500, safety_margin=1.0),
+    "gemini-3.1-flash-lite": ModelQuota(rpm=15, tpm=250000, rpd=500, safety_margin=1.0),
 }
 
 
