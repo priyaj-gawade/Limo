@@ -74,6 +74,18 @@ jobs:
           GEMINI_KEY_1: ${{ secrets.GEMINI_KEY_1 || secrets.GEMINI_API_KEY }}
           GEMINI_KEY_2: ${{ secrets.GEMINI_KEY_2 }}
           GEMINI_KEY_3: ${{ secrets.GEMINI_KEY_3 }}
+          PEXELS_KEY_1: ${{ secrets.PEXELS_KEY_1 }}
+          PEXELS_KEY_2: ${{ secrets.PEXELS_KEY_2 }}
+          PEXELS_KEY_3: ${{ secrets.PEXELS_KEY_3 }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY || secrets.PEXELS_KEY_1 }}
+          PIXABAY_KEY_1: ${{ secrets.PIXABAY_KEY_1 }}
+          PIXABAY_KEY_2: ${{ secrets.PIXABAY_KEY_2 }}
+          PIXABAY_KEY_3: ${{ secrets.PIXABAY_KEY_3 }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY || secrets.PIXABAY_KEY_1 }}
+          UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY || secrets.UNSPLASH_KEY_1 }}
+          UNSPLASH_KEY_1: ${{ secrets.UNSPLASH_KEY_1 || secrets.UNSPLASH_ACCESS_KEY }}
+          UNSPLASH_KEY_2: ${{ secrets.UNSPLASH_KEY_2 }}
+          UNSPLASH_SECRET_KEY: ${{ secrets.UNSPLASH_SECRET_KEY }}
           PAYLOAD_JSON: ${{ toJson(github.event.client_payload || github.event.inputs) }}
         run: |
           python backend/worker/github_worker_runner.py

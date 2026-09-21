@@ -237,23 +237,13 @@ class EngineRouter:
                     if dispatched:
                         if progress_callback:
                             progress_callback("github_dispatch", "Dispatched on-demand cloud render to GitHub Actions")
-                        return Artifact(
-                            id=artifact_id,
-                            title=deliverable.title,
-                            artifact_type=ArtifactType.VIDEO if deliverable.format == OutputFormat.VIDEO else ArtifactType.INFOGRAPHIC,
-                            file_format=".mp4" if deliverable.format == OutputFormat.VIDEO else ".png",
-                            storage_ref=f"worker://{artifact_id}",
-                            size_bytes=0,
-                            project_id=project_id,
-                            job_id=resolved_job_id,
-                            validation_status=ValidationStatus.VALID,
-                            metadata={
-                                "deliverable_id": deliverable.deliverable_id,
-                                "rendered_by": "github_actions",
-                                "execution_id": execution_id,
-                                "format": deliverable.format.value,
-                            },
+                        logger.info(
+                            "Dispatched cloud render to GitHub Actions for job %s (exec_id: %s, artifact_id: %s). Returning None for asynchronous lifecycle.",
+                            resolved_job_id,
+                            execution_id,
+                            artifact_id,
                         )
+                        return None
 
                 # 2. Secondary Cloud Path: Local Turbo Worker Tunnel
                 try:

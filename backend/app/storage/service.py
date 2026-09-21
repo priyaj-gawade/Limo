@@ -10,7 +10,7 @@ import logging
 import os
 from pathlib import Path
 import re
-from typing import Optional, Tuple, Union
+from typing import Any, Optional, Tuple, Union
 import uuid
 
 from ..config import settings
@@ -82,6 +82,43 @@ class StorageService:
     def compute_sha256(content: bytes) -> str:
         """Calculate standardized 64-character lowercase SHA-256 hexadecimal digest."""
         return hashlib.sha256(content).hexdigest().lower()
+
+    @staticmethod
+    def compute_stream_sha256(stream: Any, chunk_size: int = 64 * 1024) -> Tuple[str, int]:
+        """Calculate standardized SHA-256 digest and byte size from a stream incrementally."""
+        hasher = hashlib.sha256()
+        total_bytes = 0
+        while True:
+            chunk = stream.read(chunk_size)
+            if not chunk:
+                break
+            hasher.update(chunk)
+            total_bytes += len(chunk)
+        return hasher.hexdigest().lower(), total_bytes
+
+    def compute_file_sha256(self, storage_ref: str, chunk_size: int = 64 * 1024) -> Tuple[str, int]:
+        """Calculate SHA-256 and byte size of a stored asset without loading it entirely into RAM."""
+        try:
+            path = self.safe_resolve(storage_ref)
+            if path.is_file():
+                with open(path, "rb") as f:
+                    return self.compute_stream_sha256(f, chunk_size)
+        except StorageError:
+            pass
+
+        # If not on local disk, check if web storage can recover it to local cache
+        if self._web_storage and self._web_storage.is_configured and storage_ref.startswith("artifacts/"):
+            try:
+                self._web_storage.read_artifact(storage_ref)
+                local_rel = storage_ref.removeprefix("artifacts/").lstrip("/")
+                local_path = self._web_storage.local_cache_dir / local_rel
+                if local_path.is_file():
+                    with open(local_path, "rb") as f:
+                        return self.compute_stream_sha256(f, chunk_size)
+            except Exception as exc:
+                logger.warning("Failed to recover asset from web storage for hash verification: %s", exc)
+
+        raise StorageError(f"Storage asset not found or unreadable: '{storage_ref}'")
 
     @staticmethod
     def _sanitize_filename(filename: str) -> str:
@@ -179,6 +216,87 @@ class StorageService:
         size_bytes, sha256_hash = self._atomic_write(target_path, content)
         logger.info("Saved artifact file '%s' (%d bytes, sha256: %s)", storage_ref, size_bytes, sha256_hash[:8])
         return storage_ref, size_bytes, sha256_hash
+
+    async def save_artifact_stream(
+        self,
+        artifact_id: str,
+        filename: str,
+        upload_file: Any,
+        chunk_size: int = 64 * 1024,
+    ) -> Tuple[str, int, str]:
+        """Stream an uploaded deliverable file directly to disk/storage in 64 KB chunks.
+
+        Computes cryptographic SHA-256 incrementally on the fly.
+        Prevents high heap memory allocation on Render for large video files.
+        Returns: (storage_ref, size_bytes, sha256_hash).
+        """
+        clean_name = self._sanitize_filename(filename)
+        self.ensure_directories()
+
+        temp_filename = f"tmp_upload_{uuid.uuid4().hex}.tmp"
+        temp_path = self.temp_dir / temp_filename
+
+        hasher = hashlib.sha256()
+        size_bytes = 0
+
+        try:
+            with open(temp_path, "wb") as f:
+                while True:
+                    if hasattr(upload_file, "read"):
+                        import inspect
+                        if inspect.iscoroutinefunction(upload_file.read):
+                            chunk = await upload_file.read(chunk_size)
+                        else:
+                            chunk = upload_file.read(chunk_size)
+                    else:
+                        break
+
+                    if not chunk:
+                        break
+                    hasher.update(chunk)
+                    size_bytes += len(chunk)
+                    f.write(chunk)
+                f.flush()
+                os.fsync(f.fileno())
+
+            if size_bytes == 0:
+                raise StorageError("Uploaded file stream is empty")
+
+            computed_sha256 = hasher.hexdigest().lower()
+            storage_ref = f"artifacts/{artifact_id}/{clean_name}"
+
+            # Target path under artifacts sandbox
+            target_path = self.safe_resolve(storage_ref)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(temp_path, target_path)
+
+            # If web surface with Supabase Storage, upload to Supabase via streaming
+            if self._web_storage and self._web_storage.is_configured:
+                self._web_storage.save_artifact_from_file(
+                    artifact_id=artifact_id,
+                    filename=clean_name,
+                    file_path=target_path,
+                    size_bytes=size_bytes,
+                    sha256_hash=computed_sha256,
+                )
+
+            logger.info(
+                "Saved streamed artifact '%s' (%d bytes, sha256: %s)",
+                storage_ref,
+                size_bytes,
+                computed_sha256[:8],
+            )
+            return storage_ref, size_bytes, computed_sha256
+
+        except Exception as e:
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+            if isinstance(e, StorageError):
+                raise
+            raise StorageError(f"Failed to stream and save artifact '{clean_name}': {e}") from e
 
     def save_extraction_file(self, source_id: str, content: bytes) -> str:
         """Atomically persist structured extraction JSON result."""

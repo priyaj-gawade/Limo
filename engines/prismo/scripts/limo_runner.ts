@@ -214,6 +214,9 @@ interface RunnerContract {
   outputPath?: string;
   bridge?: BridgeConfig;
   mockProvider?: boolean;
+  pexelsKeys?: string[];
+  pixabayKeys?: string[];
+  unsplashKeys?: string[];
 }
 
 interface RunnerExecutionResult {
@@ -325,11 +328,41 @@ async function run() {
     process.exit(3);
   }
 
+  // Load stock API key arrays from contract or process.env fallback
+  const pexelsKeys: string[] = (contract.pexelsKeys && contract.pexelsKeys.length > 0)
+    ? contract.pexelsKeys
+    : [
+        process.env.PEXELS_KEY_1,
+        process.env.PEXELS_KEY_2,
+        process.env.PEXELS_KEY_3,
+        process.env.PEXELS_API_KEY
+      ].filter((k): k is string => Boolean(k && k.trim()));
+
+  const pixabayKeys: string[] = (contract.pixabayKeys && contract.pixabayKeys.length > 0)
+    ? contract.pixabayKeys
+    : [
+        process.env.PIXABAY_KEY_1,
+        process.env.PIXABAY_KEY_2,
+        process.env.PIXABAY_KEY_3,
+        process.env.PIXABAY_API_KEY
+      ].filter((k): k is string => Boolean(k && k.trim()));
+
+  const unsplashKeys: string[] = (contract.unsplashKeys && contract.unsplashKeys.length > 0)
+    ? contract.unsplashKeys
+    : [
+        process.env.UNSPLASH_ACCESS_KEY,
+        process.env.UNSPLASH_KEY_1,
+        process.env.UNSPLASH_KEY_2
+      ].filter((k): k is string => Boolean(k && k.trim()));
+
   // Headless Engine Initialization
   const engine = new StandaloneDesignEngine({
     dataDir: path.resolve(contract.dataDir),
     geminiKeys: [], // Zero Gemini keys managed by Prismo
     modelProvider,
+    pexelsKeys,
+    pixabayKeys,
+    unsplashKeys,
     enablePreviewServer: false,
     autoExportPng: false
   });

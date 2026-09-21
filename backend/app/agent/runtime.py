@@ -858,6 +858,22 @@ class LimoAgentRuntime:
                         job_id=job.id,
                     )
 
+                    if artifact is None:
+                        summary = f"Queued video cloud render (Job ID: {job.id}) via GitHub Actions."
+                        content = (
+                            f"I have initiated cloud rendering for your video: **{planned_deliv.title}**.\n\n"
+                            f"The task has been dispatched to GitHub Actions for heavy compute generation (Job ID: `{job.id}`).\n\n"
+                            f"The render is executing in the background and will update your session as soon as the deliverable is completed."
+                        )
+                        assistant_msg = self.chat_svc.add_assistant_message(
+                            session_id=session_id,
+                            content=content,
+                            mode=mode or FeatureMode.VIDEO,
+                            artifact_ids=[],
+                            execution_summary=summary,
+                        )
+                        return assistant_msg
+
                     dur_info = artifact.metadata.get("duration_seconds", target_dur) if artifact.metadata else target_dur
                     summary = f"Generated {dur_info}s video '{artifact.title}.mp4' via D6 and OpenMontage isolated runner."
                     content = (
@@ -1025,6 +1041,22 @@ class LimoAgentRuntime:
                         job_id=job.id,
                         unified_input=context.unified_input,
                     )
+
+                    if artifact is None:
+                        summary = f"Queued {aspect_ratio} infographic cloud render (Job ID: {job.id}) via GitHub Actions."
+                        content = (
+                            f"I have initiated cloud rendering for your infographic: **{planned_deliv.title}** ({aspect_ratio}).\n\n"
+                            f"The task has been dispatched to GitHub Actions for heavy compute generation (Job ID: `{job.id}`).\n\n"
+                            f"The render is executing in the background and will update your session as soon as the deliverable is completed."
+                        )
+                        assistant_msg = self.chat_svc.add_assistant_message(
+                            session_id=session_id,
+                            content=content,
+                            mode=mode or FeatureMode.NONE,
+                            artifact_ids=[],
+                            execution_summary=summary,
+                        )
+                        return assistant_msg
 
                     summary = f"Generated {aspect_ratio} infographic poster '{artifact.title}.png' via D6 and Prismo design engine."
                     content = (

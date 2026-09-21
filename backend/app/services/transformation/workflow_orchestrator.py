@@ -228,7 +228,27 @@ class TransformationWorkflowOrchestrator:
                             )
 
                         if not art:
-                            raise ValueError(f"Adapter dispatch returned empty artifact for {deliv_id}")
+                            # Deliverable was dispatched asynchronously to cloud runner (e.g. GitHub Actions)
+                            logger.info(
+                                "Deliverable '%s' dispatched asynchronously to cloud runner. Transitioning task to BLOCKED.",
+                                deliv_id,
+                            )
+                            task.status = TaskStatus.BLOCKED
+                            task.contract_payload = {
+                                "status": "dispatched_to_cloud",
+                                "job_id": workflow.job_id,
+                                "deliverable_id": deliv_id,
+                            }
+                            blocked_contracts[deliv_id] = task.contract_payload
+                            success = True
+                            if handoff_svc:
+                                handoff_svc.on_task_progress(
+                                    workflow.job_id,
+                                    deliv_id,
+                                    0.25,
+                                    "Dispatched to GitHub cloud runner",
+                                )
+                            break
 
                         task.artifact_id = art.id
                         task.status = TaskStatus.COMPLETED
@@ -412,7 +432,7 @@ class TransformationWorkflowOrchestrator:
             handoff_svc=handoff_svc,
         )
 
-    def execute_single_task(self, job_id: str, deliverable_id: str) -> Artifact:
+    def execute_single_task(self, job_id: str, deliverable_id: str) -> Optional[Artifact]:
         """Idempotently execute a single planned deliverable from a job contract."""
         job = self.job_svc.get_job(job_id)
         if job.state == JobState.CANCELLED:
@@ -441,8 +461,6 @@ class TransformationWorkflowOrchestrator:
             project_id=job.project_id,
             job_id=job.id,
         )
-        if not art:
-            raise BadRequestError(f"Engine dispatch produced no artifact for deliverable '{deliverable_id}'")
         return art
 
     def _find_existing_artifact(self, job_id: str, deliverable_id: str) -> Optional[Artifact]:

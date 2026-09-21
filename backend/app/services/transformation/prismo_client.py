@@ -285,9 +285,38 @@ class PrismoClient:
 
         timeout = timeout_seconds or self.default_timeout
 
-        # Ensure workspace directory is passed
+        # Ensure workspace directory and stock photo key pools are passed
         contract_data = dict(contract)
         contract_data["dataDir"] = str(self.workspace_dir)
+
+        if "pexelsKeys" not in contract_data:
+            contract_data["pexelsKeys"] = [
+                k.strip() for k in [
+                    os.getenv("PEXELS_KEY_1"),
+                    os.getenv("PEXELS_KEY_2"),
+                    os.getenv("PEXELS_KEY_3"),
+                    os.getenv("PEXELS_API_KEY"),
+                ] if k and k.strip()
+            ]
+
+        if "pixabayKeys" not in contract_data:
+            contract_data["pixabayKeys"] = [
+                k.strip() for k in [
+                    os.getenv("PIXABAY_KEY_1"),
+                    os.getenv("PIXABAY_KEY_2"),
+                    os.getenv("PIXABAY_KEY_3"),
+                    os.getenv("PIXABAY_API_KEY"),
+                ] if k and k.strip()
+            ]
+
+        if "unsplashKeys" not in contract_data:
+            contract_data["unsplashKeys"] = [
+                k.strip() for k in [
+                    os.getenv("UNSPLASH_ACCESS_KEY"),
+                    os.getenv("UNSPLASH_KEY_1"),
+                    os.getenv("UNSPLASH_KEY_2"),
+                ] if k and k.strip()
+            ]
 
         # Start ephemeral loopback LLM bridge server if mockProvider is not set
         bridge_server: Optional[HTTPServer] = None

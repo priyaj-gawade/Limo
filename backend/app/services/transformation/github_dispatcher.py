@@ -32,11 +32,15 @@ class GitHubActionsDispatcher:
 
     @property
     def pat(self) -> str:
-        return (self._pat or os.getenv("GITHUB_PAT", "")).strip()
+        if self._pat is not None:
+            return self._pat.strip()
+        return os.getenv("GITHUB_PAT", "").strip()
 
     @property
     def repo(self) -> str:
-        return (self._repo or os.getenv("GITHUB_REPO", "priyaj-gawade/Limo")).strip()
+        if self._repo is not None:
+            return self._repo.strip()
+        return os.getenv("GITHUB_REPO", "priyaj-gawade/Limo").strip()
 
     @property
     def backend_url(self) -> str:
@@ -78,8 +82,6 @@ class GitHubActionsDispatcher:
         }
 
         # GitHub repository_dispatch limits client_payload to 10 top-level keys.
-        # fetch_url/callback_url/upload_url are derived by the worker from
-        # backend_url + job_id, so we omit them here to stay within the limit.
         client_payload = {
             "job_id": job_id,
             "execution_id": execution_id,
@@ -88,7 +90,9 @@ class GitHubActionsDispatcher:
             "artifact_id": artifact_id,
             "title": title or "Deliverable Render",
             "aspect_ratio": aspect_ratio or "3:4",
-            "backend_url": self.backend_url,
+            "fetch_url": f"{self.backend_url}/api/v1/jobs/{job_id}/context",
+            "callback_url": f"{self.backend_url}/api/v1/jobs/{job_id}/callback",
+            "upload_url": f"{self.backend_url}/api/v1/jobs/{job_id}/upload",
         }
 
         req_body = {

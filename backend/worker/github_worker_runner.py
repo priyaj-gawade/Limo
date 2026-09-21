@@ -126,29 +126,33 @@ def main() -> int:
         if not output_file.exists() or output_file.stat().st_size == 0:
             raise RuntimeError(f"Output deliverable file '{output_file}' is missing or empty")
 
-        size_bytes = output_file.stat().st_size
-        file_bytes = output_file.read_bytes()
-        sha256_hex = hashlib.sha256(file_bytes).hexdigest()
+        hasher = hashlib.sha256()
+        with open(output_file, "rb") as f:
+            while chunk := f.read(64 * 1024):
+                hasher.update(chunk)
+        sha256_hex = hasher.hexdigest().lower()
         logger.info("Render completed successfully: file=%s, size=%d, sha256=%s", output_file.name, size_bytes, sha256_hex)
 
         # Step 4: Upload deliverable to Backend / Supabase
         storage_ref = f"worker://{artifact_id}"
         try:
-            with httpx.Client(timeout=60.0) as client:
-                files = {"file": (filename, file_bytes, mime_type)}
-                data = {
-                    "job_id": job_id,
-                    "execution_id": execution_id,
-                    "artifact_id": artifact_id,
-                    "sha256": sha256_hex,
-                    "mime_type": mime_type,
-                }
-                up_res = client.post(upload_url, headers=auth_headers, files=files, data=data)
-                if up_res.status_code in (200, 201):
-                    up_data = up_res.json()
-                    storage_ref = up_data.get("storage_ref", storage_ref)
-                else:
-                    logger.warning("Upload endpoint returned status %d: %s", up_res.status_code, up_res.text)
+            with open(output_file, "rb") as f:
+                with httpx.Client(timeout=120.0) as client:
+                    files = {"file": (filename, f, mime_type)}
+                    data = {
+                        "job_id": job_id,
+                        "execution_id": execution_id,
+                        "artifact_id": artifact_id,
+                        "sha256": sha256_hex,
+                        "content_hash": sha256_hex,
+                        "mime_type": mime_type,
+                    }
+                    up_res = client.post(upload_url, headers=auth_headers, files=files, data=data)
+                    if up_res.status_code in (200, 201):
+                        up_data = up_res.json()
+                        storage_ref = up_data.get("storage_ref", storage_ref)
+                    else:
+                        logger.warning("Upload endpoint returned status %d: %s", up_res.status_code, up_res.text)
         except Exception as ue:
             logger.warning("Direct upload failed (%s). Proceeding with reference metadata.", ue)
 
@@ -167,6 +171,7 @@ def main() -> int:
                     "storage_ref": storage_ref,
                     "size_bytes": size_bytes,
                     "sha256": sha256_hex,
+                    "content_hash": sha256_hex,
                     "mime_type": mime_type,
                     "filename": filename,
                 },
@@ -216,6 +221,30 @@ def _render_infographic(
 
     output_path = workspace_dir / f"{artifact_id}.png"
 
+    pexels_keys = [
+        k.strip() for k in [
+            os.getenv("PEXELS_KEY_1"),
+            os.getenv("PEXELS_KEY_2"),
+            os.getenv("PEXELS_KEY_3"),
+            os.getenv("PEXELS_API_KEY"),
+        ] if k and k.strip()
+    ]
+    pixabay_keys = [
+        k.strip() for k in [
+            os.getenv("PIXABAY_KEY_1"),
+            os.getenv("PIXABAY_KEY_2"),
+            os.getenv("PIXABAY_KEY_3"),
+            os.getenv("PIXABAY_API_KEY"),
+        ] if k and k.strip()
+    ]
+    unsplash_keys = [
+        k.strip() for k in [
+            os.getenv("UNSPLASH_ACCESS_KEY"),
+            os.getenv("UNSPLASH_KEY_1"),
+            os.getenv("UNSPLASH_KEY_2"),
+        ] if k and k.strip()
+    ]
+
     contract = {
         "action": "generate_and_export",
         "projectName": title,
@@ -224,6 +253,9 @@ def _render_infographic(
         "dataDir": str(workspace_dir),
         "outputPath": str(output_path),
         "mockProvider": False,
+        "pexelsKeys": pexels_keys,
+        "pixabayKeys": pixabay_keys,
+        "unsplashKeys": unsplash_keys,
     }
 
     contract_file = workspace_dir / f"contract_{artifact_id}.json"

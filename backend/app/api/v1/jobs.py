@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 import uuid
 
@@ -45,6 +46,7 @@ class JobCallbackPayload(BaseModel):
     storage_ref: Optional[str] = None
     size_bytes: Optional[int] = 0
     sha256: Optional[str] = None
+    content_hash: Optional[str] = None
     mime_type: Optional[str] = None
     filename: Optional[str] = None
     error_message: Optional[str] = None
@@ -166,6 +168,7 @@ async def upload_job_artifact(
     execution_id: Optional[str] = Form(None),
     artifact_id: Optional[str] = Form(None),
     sha256: Optional[str] = Form(None),
+    content_hash: Optional[str] = Form(None),
     mime_type: Optional[str] = Form(None),
     x_limo_worker_key: Optional[str] = Header(None, alias="X-Limo-Worker-Key"),
 ) -> Dict[str, Any]:
@@ -180,23 +183,42 @@ async def upload_job_artifact(
     job = job_service.get_job(job_id)
 
     art_id = artifact_id or f"art_gh_{uuid.uuid4().hex[:12]}"
-    file_bytes = await file.read()
-    if not file_bytes:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty")
-
     filename = file.filename or f"{art_id}.bin"
-    storage_ref, size_bytes, computed_sha256 = storage_service.save_artifact_file(
-        artifact_id=art_id,
-        filename=filename,
-        content=file_bytes,
-    )
+
+    try:
+        storage_ref, size_bytes, computed_sha256 = await storage_service.save_artifact_stream(
+            artifact_id=art_id,
+            filename=filename,
+            upload_file=file,
+        )
+    except Exception as exc:
+        logger.error("Failed to stream upload for job %s: %s", job_id, exc)
+        raise HTTPException(status_code=400, detail=f"File upload failed: {exc}")
+
+    # Authoritative verification against worker-provided hash if supplied
+    worker_hash = (content_hash or sha256 or "").strip().lower()
+    if worker_hash:
+        if worker_hash != computed_sha256:
+            storage_service.delete_file(storage_ref)
+            logger.warning(
+                "Upload SHA-256 mismatch for job %s, artifact %s: worker reported '%s', backend computed '%s'",
+                job_id,
+                art_id,
+                worker_hash,
+                computed_sha256,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Content hash verification failed: worker reported {worker_hash}, backend computed {computed_sha256}",
+            )
 
     logger.info(
-        "Received worker file upload for job %s: art_id=%s, size=%d bytes, ref=%s",
+        "Received verified worker file upload for job %s: art_id=%s, size=%d bytes, ref=%s, sha256=%s",
         job_id,
         art_id,
         size_bytes,
         storage_ref,
+        computed_sha256[:8],
     )
 
     return {
@@ -204,6 +226,7 @@ async def upload_job_artifact(
         "storage_ref": storage_ref,
         "size_bytes": size_bytes,
         "sha256": computed_sha256,
+        "content_hash": computed_sha256,
         "filename": filename,
     }
 
@@ -308,69 +331,133 @@ async def worker_job_callback(
         art_type = ArtifactType.VIDEO if is_video else ArtifactType.INFOGRAPHIC
         file_ext = ".mp4" if is_video else ".png"
 
-        storage_ref = payload.storage_ref or f"worker://{artifact_id}"
+        # 1. Enforce 64-char lowercase hexadecimal content_hash requirement
+        worker_hash = (payload.content_hash or payload.sha256 or "").strip().lower()
+        if not worker_hash or len(worker_hash) != 64 or not re.match(r"^[0-9a-f]{64}$", worker_hash):
+            raise HTTPException(
+                status_code=400,
+                detail="content_hash is required and must be a valid 64-character hexadecimal SHA-256 digest",
+            )
 
-        # Normalize SHA-256 content hash
-        sha256_hash = payload.sha256.strip() if (payload.sha256 and len(payload.sha256.strip()) == 64) else hashlib.sha256(f"{artifact_id}:{job_id}".encode("utf-8")).hexdigest()
+        # 2. Resolve storage reference
+        default_filename = payload.filename or (f"{artifact_id}.mp4" if is_video else f"{artifact_id}.png")
+        storage_ref = payload.storage_ref or f"artifacts/{artifact_id}/{default_filename}"
 
-        # Register artifact in database if not already present
-        with get_connection() as conn:
-            existing_art = ArtifactRepository.get_artifact(conn, artifact_id)
-            if not existing_art:
-                art = Artifact(
-                    id=artifact_id,
-                    title=job.prompt or "Cloud Deliverable",
-                    artifact_type=art_type,
-                    file_format=file_ext,
-                    storage_ref=storage_ref,
-                    size_bytes=payload.size_bytes or 0,
-                    content_hash=sha256_hash,
-                    project_id=job.project_id,
-                    job_id=job.id,
-                    validation_status=ValidationStatus.VALID,
-                    metadata={
-                        "rendered_by": "github_actions" if payload.github_run_id else "turbo_worker",
-                        "execution_id": payload.execution_id,
-                        "github_run_id": payload.github_run_id,
-                        "mime_type": payload.mime_type or ("video/mp4" if is_video else "image/png"),
-                    },
+        # 3. Storage resolution and hash verification
+        actual_size = payload.size_bytes or 0
+
+        if storage_service.file_exists(storage_ref):
+            backend_hash, actual_size = storage_service.compute_file_sha256(storage_ref)
+            if backend_hash != worker_hash:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Content hash mismatch: worker reported '{worker_hash}', storage contains '{backend_hash}'",
                 )
-                ArtifactRepository.create_artifact(conn, art)
-                logger.info("Registered worker artifact in DB: %s (%s)", art.id, art.storage_ref)
+        else:
+            # Check alternative relative path under artifacts/
+            alt_ref = f"artifacts/{artifact_id}/{default_filename}"
+            if storage_service.file_exists(alt_ref):
+                storage_ref = alt_ref
+                backend_hash, actual_size = storage_service.compute_file_sha256(storage_ref)
+                if backend_hash != worker_hash:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Content hash mismatch: worker reported '{worker_hash}', storage contains '{backend_hash}'",
+                    )
+            elif not storage_ref.startswith("worker://"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Referenced deliverable file '{storage_ref}' does not exist in storage",
+                )
 
-        # Transition job to COMPLETED atomically
+        # 4. Authoritatively register artifact
+        title = job.prompt or ("Infographic Poster" if art_type == ArtifactType.INFOGRAPHIC else "Video Briefing")
+        
+        if storage_service.file_exists(storage_ref):
+            registered_artifact = artifact_service.register_artifact(
+                title=title,
+                artifact_type=art_type,
+                file_format=file_ext,
+                storage_ref=storage_ref,
+                project_id=job.project_id,
+                job_id=job.id,
+                artifact_id=artifact_id,
+                metadata={
+                    "rendered_by": "github_actions" if payload.github_run_id else "turbo_worker",
+                    "execution_id": payload.execution_id,
+                    "github_run_id": payload.github_run_id,
+                    "mime_type": payload.mime_type or ("video/mp4" if is_video else "image/png"),
+                    "filename": default_filename,
+                },
+            )
+        else:
+            with get_connection() as conn:
+                existing_art = ArtifactRepository.get_artifact(conn, artifact_id)
+                if not existing_art:
+                    registered_artifact = Artifact(
+                        id=artifact_id,
+                        title=title,
+                        artifact_type=art_type,
+                        file_format=file_ext,
+                        storage_ref=storage_ref,
+                        size_bytes=actual_size,
+                        content_hash=worker_hash,
+                        project_id=job.project_id,
+                        job_id=job.id,
+                        validation_status=ValidationStatus.VALID,
+                        metadata={
+                            "rendered_by": "github_actions" if payload.github_run_id else "turbo_worker",
+                            "execution_id": payload.execution_id,
+                            "github_run_id": payload.github_run_id,
+                            "mime_type": payload.mime_type or ("video/mp4" if is_video else "image/png"),
+                            "filename": default_filename,
+                        },
+                    )
+                    ArtifactRepository.create_artifact(conn, registered_artifact)
+                else:
+                    registered_artifact = existing_art
+
+        # 5. Transition job to COMPLETED atomically
         try:
             job_service.update_progress(
                 job_id=job_id,
                 state=JobState.COMPLETED,
                 progress=1.0,
                 current_stage="Deliverable rendered successfully",
-                artifact_ids=[artifact_id],
+                artifact_ids=[registered_artifact.id],
             )
         except InvalidStateError:
             pass
 
-        # Emit real-time SSE event to trigger chat deliverable card
+        # 6. Emit real-time SSE events exactly once
         try:
             event_broker.emit(
                 job_id=job_id,
-                event_type=TransformationEventType.DELIVERABLE_COMPLETED,
+                event_type=TransformationEventType.ARTIFACT_CREATED,
                 payload={
-                    "artifact_id": artifact_id,
-                    "title": job.prompt or "Cloud Deliverable",
-                    "storage_ref": storage_ref,
-                    "format": "video" if is_video else "infographic",
+                    "artifact_id": registered_artifact.id,
+                    "title": registered_artifact.title,
+                    "storage_ref": registered_artifact.storage_ref,
+                    "artifact_type": registered_artifact.artifact_type.value,
+                    "file_format": registered_artifact.file_format,
+                    "content_hash": registered_artifact.content_hash,
+                    "size_bytes": registered_artifact.size_bytes,
                 },
             )
             event_broker.emit(
                 job_id=job_id,
                 event_type=TransformationEventType.JOB_COMPLETED,
-                payload={"artifact_ids": [artifact_id]},
+                payload={"artifact_ids": [registered_artifact.id]},
             )
         except Exception as ee:
             logger.warning("Failed to emit SSE completion event: %s", ee)
 
-        return {"status": "completed", "job_id": job_id, "artifact_id": artifact_id}
+        return {
+            "status": "completed",
+            "job_id": job_id,
+            "artifact_id": registered_artifact.id,
+            "content_hash": registered_artifact.content_hash,
+        }
 
     elif cb_status in ("failed", "error"):
         error_msg = payload.error_message or "Cloud render execution failed"

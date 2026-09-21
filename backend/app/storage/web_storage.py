@@ -108,6 +108,61 @@ class WebArtifactStorage:
 
         return storage_ref, size_bytes, sha256_hash
 
+    def save_artifact_from_file(
+        self,
+        artifact_id: str,
+        filename: str,
+        file_path: Path,
+        size_bytes: int,
+        sha256_hash: str,
+    ) -> Tuple[str, int, str]:
+        """Upload deliverable file directly to Supabase Storage via streaming and cache locally.
+
+        Streams file content using a file descriptor to avoid high heap memory usage on Render.
+        """
+        storage_ref = f"artifacts/{artifact_id}/{filename}"
+
+        # 1. Ensure local cache directory has the file
+        local_path = self.local_cache_dir / artifact_id / filename
+        if local_path.resolve() != file_path.resolve() and file_path.is_file():
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(file_path, local_path)
+
+        # 2. Stream upload to Supabase Storage if configured
+        if self.is_configured:
+            content_type, _ = mimetypes.guess_type(filename)
+            content_type = content_type or "application/octet-stream"
+
+            upload_url = f"{self.supabase_url}/storage/v1/object/{self.bucket}/{storage_ref}"
+            headers = self._get_headers(content_type=content_type)
+            headers["x-upsert"] = "true"
+
+            try:
+                with open(local_path, "rb") as f:
+                    with httpx.Client(timeout=60.0) as client:
+                        resp = client.post(upload_url, headers=headers, content=f)
+                        if resp.status_code not in (200, 201):
+                            logger.warning(
+                                "Supabase Storage upload returned status %d (%s). Local cache preserved.",
+                                resp.status_code,
+                                resp.text[:200],
+                            )
+                        else:
+                            logger.info(
+                                "Successfully streamed artifact to Supabase Storage: %s/%s (%d bytes)",
+                                self.bucket,
+                                storage_ref,
+                                size_bytes,
+                            )
+            except Exception as e:
+                logger.warning(
+                    "Network error uploading artifact to Supabase Storage: %s. Local cache preserved.",
+                    e,
+                )
+
+        return storage_ref, size_bytes, sha256_hash
+
     def read_artifact(self, storage_ref: str) -> bytes:
         """Read artifact from local cache, or fetch from Supabase Storage if local cache is empty."""
         local_rel = storage_ref.removeprefix("artifacts/").lstrip("/")

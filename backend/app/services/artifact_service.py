@@ -66,12 +66,16 @@ class ArtifactService:
                 f"Referenced artifact file does not exist in storage: '{clean_ref}'"
             )
 
-        # 3. Read physical file to verify hash and byte count
-        file_bytes = self.storage.read_file(clean_ref)
-        content_hash = self.storage.compute_sha256(file_bytes)
-        size_bytes = len(file_bytes)
+        # 3. Compute SHA-256 hash and byte count via streaming (avoids high RAM allocation)
+        content_hash, size_bytes = self.storage.compute_file_sha256(clean_ref)
 
         with get_connection(self.db_path) as conn:
+            if artifact_id:
+                existing = ArtifactRepository.get_artifact(conn, artifact_id)
+                if existing:
+                    logger.info("Artifact '%s' is already registered (idempotent)", artifact_id)
+                    return existing
+
             if project_id:
                 project = ProjectRepository.get_project(conn, project_id)
                 if not project:
