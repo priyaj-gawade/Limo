@@ -204,14 +204,10 @@ class EngineRouter:
 
         # Implemented native engine execution
         if deliverable and (canonical or unified_input):
-            # Turbo Worker Offload for Web Surface or when TURBO_WORKER_URL is explicitly configured
             is_heavy = deliverable.format in (OutputFormat.VIDEO, OutputFormat.INFOGRAPHIC)
-            from ...auth.config import auth_config
-            import os
-            worker_url = os.getenv("TURBO_WORKER_URL")
 
-            if is_heavy and (auth_config.is_web_surface or worker_url):
-                # 1. Primary Cloud Path: GitHub Actions On-Demand Dispatcher
+            if is_heavy:
+                # Primary Cloud Path: GitHub Actions On-Demand Dispatcher
                 from .github_dispatcher import github_actions_dispatcher
                 if github_actions_dispatcher.is_configured():
                     import uuid
@@ -245,37 +241,8 @@ class EngineRouter:
                         )
                         return None
 
-                # 2. Secondary Cloud Path: Local Turbo Worker Tunnel
-                try:
-                    return self._dispatch_turbo_worker(
-                        deliverable=deliverable,
-                        canonical=canonical,
-                        config=config,
-                        project_id=project_id,
-                        job_id=job_id,
-                        unified_input=unified_input,
-                        progress_callback=progress_callback,
-                    )
-                except Exception as exc:
-                    logger.warning("Turbo worker dispatch failed: %s. Checking for native adapter fallback.", exc)
-                    adapter = self.get_native_adapter(deliverable.format)
-                    is_avail = False
-                    if hasattr(adapter, "client") and hasattr(adapter.client, "is_available"):
-                        is_avail = adapter.client.is_available()
-
-                    if is_avail:
-                        logger.info("Falling back to native in-process adapter for format %s", deliverable.format)
-                        effective_config = config or GenerationConfig()
-                        return adapter.execute(
-                            canonical=canonical,
-                            deliverable=deliverable,
-                            config=effective_config,
-                            project_id=project_id,
-                            job_id=job_id,
-                            unified_input=unified_input,
-                            progress_callback=progress_callback,
-                        )
-                    raise
+                # Fallback: native in-process adapter (uses Playwright Chromium on Render)
+                logger.info("GitHub Actions dispatch unavailable or failed. Using native in-process adapter for %s.", deliverable.format.value)
 
             adapter = self.get_native_adapter(deliverable.format)
             effective_config = config or GenerationConfig()
@@ -310,107 +277,6 @@ class EngineRouter:
             return artifact
 
         return None
-
-    def _dispatch_turbo_worker(
-        self,
-        deliverable: PlannedDeliverable,
-        canonical: Optional[CanonicalContent],
-        config: Optional[GenerationConfig],
-        project_id: Optional[str] = None,
-        job_id: Optional[str] = None,
-        unified_input: Optional[Any] = None,
-        progress_callback: Optional[Callable[[str, str], None]] = None,
-    ) -> Artifact:
-        """Offload heavy rendering (video / infographic) to Turbo Worker via HTTP API."""
-        import os
-        import uuid
-        import httpx
-        from ...models.enums import ArtifactType, ValidationStatus
-        from ...db.connection import get_connection
-        from ...db.repositories.artifact_repo import ArtifactRepository
-        from ...exceptions import BadRequestError
-
-        worker_url = os.getenv("TURBO_WORKER_URL", "http://localhost:8005").rstrip("/")
-        worker_token = (os.getenv("WORKER_AUTH_TOKEN") or settings.resolved_worker_token or "").strip()
-
-        resolved_job_id = job_id or f"job_{uuid.uuid4().hex[:12]}"
-        artifact_id = f"art_{uuid.uuid4().hex[:16]}"
-        is_video = deliverable.format == OutputFormat.VIDEO
-        deliverable_type = "video" if is_video else "infographic"
-        filename = f"{deliverable.deliverable_id}{'.mp4' if is_video else '.png'}"
-        mime_type = "video/mp4" if is_video else "image/png"
-
-        if progress_callback:
-            progress_callback("worker_dispatch", f"Offloading {deliverable_type} to Turbo Worker")
-
-        req_payload = {
-            "job_id": resolved_job_id,
-            "artifact_id": artifact_id,
-            "deliverable_type": deliverable_type,
-            "filename": filename,
-            "mime_type": mime_type,
-            "payload": {
-                "title": deliverable.title,
-                "canonical_id": canonical.id if canonical else None,
-                "canonical_hash": canonical.content_hash if canonical else None,
-            },
-        }
-
-        try:
-            with httpx.Client(timeout=120.0) as client:
-                res = client.post(
-                    f"{worker_url}/execute",
-                    headers={"X-Limo-Worker-Key": worker_token},
-                    json=req_payload,
-                )
-        except httpx.RequestError as exc:
-            logger.error("Turbo Worker unreachable at %s: %s", worker_url, exc)
-            raise BadRequestError(f"Turbo Worker is offline or unreachable at {worker_url}") from exc
-
-        if res.status_code != 200:
-            logger.error("Turbo Worker execution failed (%d): %s", res.status_code, res.text)
-            if res.status_code == 530:
-                raise BadRequestError(
-                    f"Turbo Worker Cloudflare Tunnel is offline (HTTP 530 at {worker_url}). "
-                    "Please start the local Turbo Worker and Cloudflare Tunnel using .\\start-worker.ps1."
-                )
-            raise BadRequestError(f"Turbo Worker execution failed with status {res.status_code}: {res.text[:200]}")
-
-        data = res.json()
-        storage_ref = data.get("artifact_ref", f"worker://{artifact_id}")
-        size_bytes = data.get("size_bytes", 0)
-        sha256 = data.get("sha256", "")
-
-        art = Artifact(
-            id=artifact_id,
-            title=deliverable.title,
-            artifact_type=ArtifactType.VIDEO if is_video else ArtifactType.INFOGRAPHIC,
-            file_format=".mp4" if is_video else ".png",
-            storage_ref=storage_ref,
-            size_bytes=size_bytes,
-            content_hash=sha256,
-            project_id=project_id,
-            job_id=resolved_job_id,
-            validation_status=ValidationStatus.VALID,
-            metadata={
-                "deliverable_id": deliverable.deliverable_id,
-                "rendered_by": "turbo_worker",
-                "format": deliverable.format.value,
-                "worker_url": worker_url,
-            },
-        )
-
-        with get_connection() as conn:
-            ArtifactRepository.create_artifact(conn, art)
-
-        logger.info(
-            "Turbo Worker offload completed for %s: %s (%s, %d bytes)",
-            deliverable_type,
-            art.id,
-            art.storage_ref,
-            art.size_bytes,
-        )
-        return art
 
     def build_contract(
         self,
