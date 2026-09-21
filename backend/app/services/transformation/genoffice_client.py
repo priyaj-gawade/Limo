@@ -101,7 +101,7 @@ class GenOfficeAutomationClient:
             return True
 
         logger.info("GenOffice not running. Auto-launching GenOffice Electron process in background...")
-        genoffice_dir = Path(__file__).resolve().parents[4] / "external" / "GenOffice"
+        genoffice_dir = Path(__file__).resolve().parents[4] / "engines" / "office"
         if not genoffice_dir.exists():
             logger.warning("GenOffice directory not found at: %s", genoffice_dir)
             return False

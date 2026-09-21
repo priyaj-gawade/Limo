@@ -191,8 +191,8 @@ class PrismoClient:
             self.runner_path = runner_path.resolve()
         else:
             # Check for production compiled runner first, then development TypeScript runner
-            prod_runner = limo_root / "external" / "Prismo" / "dist" / "scripts" / "limo_runner.js"
-            dev_runner = limo_root / "external" / "Prismo" / "scripts" / "limo_runner.ts"
+            prod_runner = limo_root / "engines" / "prismo" / "dist" / "scripts" / "limo_runner.js"
+            dev_runner = limo_root / "engines" / "prismo" / "scripts" / "limo_runner.ts"
             self.runner_path = prod_runner if prod_runner.is_file() else dev_runner
 
         self.workspace_dir = (workspace_dir or (limo_root / "data" / "prismo-workspace")).resolve()

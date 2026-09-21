@@ -46,9 +46,9 @@ class OpenMontageClient:
         if runner_path is not None:
             self.runner_path = runner_path.resolve()
         else:
-            # Default location: external/OpenMontage/scripts/limo_runner.py
+            # Default location: engines/video/scripts/limo_runner.py
             limo_root = Path(__file__).resolve().parent.parent.parent.parent.parent
-            self.runner_path = (limo_root / "external" / "OpenMontage" / "scripts" / "limo_runner.py").resolve()
+            self.runner_path = (limo_root / "engines" / "video" / "scripts" / "limo_runner.py").resolve()
 
         self.default_timeout = default_timeout_seconds
 
