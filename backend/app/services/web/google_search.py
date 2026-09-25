@@ -1,13 +1,15 @@
-"""Google Custom Search JSON API client for Limo (Phase D8.9).
+"""Google Custom Search JSON API client for Limo (Phase D8.9) [DEPRECATED].
 
-Enforces deterministic limits, timeout boundaries, domain deduplication,
-and zero credential leakage. Never returns mock or simulated results.
+DEPRECATION NOTICE:
+Google Custom Search JSON API is deprecated and disabled in Limo.
+The project uses the modern zero-configuration `ddgs` provider as primary.
 """
 
 import logging
 import os
 import urllib.parse
 from typing import List, Optional
+import warnings
 
 import httpx
 
@@ -27,7 +29,10 @@ class GoogleSearchConfigurationError(Exception):
 
 
 class GoogleSearchClient:
-    """Client for Google Custom Search JSON API."""
+    """[DEPRECATED] Client for Google Custom Search JSON API.
+    
+    Use DDGSWebSearchClient (`ddgs`) instead.
+    """
 
     provider_name: str = "google"
 

@@ -1,35 +1,41 @@
-# Limo Backend - Pinned Core Dependencies
-fastapi==0.115.8
-uvicorn[standard]==0.34.0
-pydantic==2.13.5
-pydantic-settings==2.7.1
-python-multipart==0.0.20
-python-dotenv==1.2.3
+# Limo Backend - Production Dependencies
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.10.0
+pydantic-settings>=2.7.0
+python-multipart>=0.0.18
+python-dotenv>=1.0.0
 
 # PostgreSQL Driver for Web Surface (Psycopg 3)
-psycopg[binary]==3.3.6
+psycopg[binary]>=3.2.0
 
 # Pinned Development & Testing Dependencies
-pytest==8.3.4
-pytest-asyncio==0.25.3
-httpx==0.28.1
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
+httpx>=0.27.0
 
 # Real-time Events
-sse-starlette==3.4.11
+sse-starlette>=2.0.0
 
 # Web Search & Discovery
-ddgs==9.16.0
-google-auth==2.58.0
-google-genai==2.22.0
+ddgs>=9.16.0
+google-auth>=2.30.0
+google-genai>=1.0.0
 
 # Direct Web Scraping & Dynamic Crawling (D5 & D8.9)
-trafilatura==2.2.0
-playwright==1.63.0
-Crawl4AI==0.9.3
+trafilatura>=2.0.0
+playwright>=1.48.0
+Crawl4AI>=0.9.0
 
 # Document & Media Extraction (D5)
-python-docx==1.2.0
-pypdf==6.18.1
-pdfplumber==0.11.10
-openpyxl==3.1.5
-beautifulsoup4==4.15.0
+python-docx>=1.1.0
+pypdf>=5.0.0
+pdfplumber>=0.11.0
+openpyxl>=3.1.0
+beautifulsoup4>=4.12.0
+Pillow>=10.4.0
+pyyaml>=6.0.2
+requests>=2.31.0
+edge-tts>=6.1.12
+youtube-transcript-api>=0.6.2
+

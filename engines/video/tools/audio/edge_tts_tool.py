@@ -150,16 +150,31 @@ class EdgeTTSTool(BaseTool):
         )
 
         # Convert speaking_rate float if rate string not explicitly provided
-        rate_str = inputs.get("rate")
-        if not rate_str and "speaking_rate" in inputs:
+        rate_raw = inputs.get("rate")
+        if isinstance(rate_raw, str) and (rate_raw.endswith("%") or rate_raw.endswith("Hz")):
+            rate_str = rate_raw
+        elif "speaking_rate" in inputs and isinstance(inputs["speaking_rate"], (int, float)):
             speed = float(inputs["speaking_rate"])
             percent = round((speed - 1.0) * 100)
             rate_str = f"{percent:+d}%"
-        elif not rate_str:
+        else:
             rate_str = "+0%"
 
-        pitch_str = inputs.get("pitch") or "+0Hz"
-        volume_str = inputs.get("volume") or "+0%"
+        pitch_raw = inputs.get("pitch")
+        if isinstance(pitch_raw, (int, float)):
+            pitch_str = f"{int(pitch_raw):+d}Hz" if pitch_raw != 0 else "+0Hz"
+        elif isinstance(pitch_raw, str) and (pitch_raw.endswith("Hz") or pitch_raw.endswith("%")):
+            pitch_str = pitch_raw
+        else:
+            pitch_str = "+0Hz"
+
+        vol_raw = inputs.get("volume")
+        if isinstance(vol_raw, str) and (vol_raw.endswith("%") or vol_raw.endswith("dB")):
+            volume_str = vol_raw
+        elif isinstance(vol_raw, (int, float)):
+            volume_str = f"{int(vol_raw):+d}%"
+        else:
+            volume_str = "+0%"
 
         output_path_str = inputs.get("output_path")
         if output_path_str:

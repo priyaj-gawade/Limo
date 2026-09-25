@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { User } from '../types';
 import { useToast } from './ToastContext';
 
@@ -7,11 +7,13 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   isLoading: boolean;
   isLoginModalOpen: boolean;
+  authError: string | null;
   openLoginModal: () => void;
   closeLoginModal: () => void;
   loginWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   checkSession: () => Promise<void>;
+  clearAuthError: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -20,9 +22,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const { showToast } = useToast();
+  const authedRef = useRef<boolean>(false);
+
+  const clearAuthError = useCallback(() => {
+    setAuthError(null);
+  }, []);
 
   const openLoginModal = useCallback(() => {
+    setAuthError(null);
     setIsLoginModalOpen(true);
   }, []);
 
@@ -30,29 +39,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoginModalOpen(false);
   }, []);
 
-  // Check current session from backend
+  // Check current session from backend with 3.5s timeout to prevent UI hanging
   const checkSession = useCallback(async () => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3500);
+
     try {
       const res = await fetch('/api/v1/auth/me', {
         credentials: 'include',
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
         const data: User = await res.json();
-        // A user is fully authenticated if provider is 'google' or 'desktop'
         if (data && (data.provider === 'google' || data.provider === 'desktop')) {
           setUser(data);
+          authedRef.current = true;
           setIsLoginModalOpen(false);
+          setAuthError(null);
           return;
         }
       }
       setUser(null);
-      // Auto-open login modal on first visit or page reload when unauthenticated
+      authedRef.current = false;
       if (window.location.pathname !== '/auth/callback') {
         setIsLoginModalOpen(true);
       }
-    } catch (err) {
-      console.error('Session check failed:', err);
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      console.warn('Session check failed or timed out:', err?.message || err);
       setUser(null);
+      authedRef.current = false;
       if (window.location.pathname !== '/auth/callback') {
         setIsLoginModalOpen(true);
       }
@@ -77,7 +95,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (res.ok) {
               const authedUser: User = await res.json();
               if (window.opener) {
-                // Post to opener window if this was a popup
                 window.opener.postMessage(
                   { type: 'LIMO_AUTH_SUCCESS', user: authedUser },
                   window.location.origin
@@ -86,24 +103,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return;
               } else {
                 setUser(authedUser);
+                authedRef.current = true;
                 window.history.replaceState({}, document.title, '/');
                 showToast(`Signed in as ${authedUser.display_name || authedUser.email}`, 'success');
               }
             } else {
               const err = await res.json().catch(() => ({}));
+              const errorText = err.detail || 'Google authentication failed';
               if (window.opener) {
                 window.opener.postMessage(
-                  { type: 'LIMO_AUTH_ERROR', error: err.detail || 'Authentication failed' },
+                  { type: 'LIMO_AUTH_ERROR', error: errorText },
                   window.location.origin
                 );
                 window.close();
                 return;
               }
-              showToast(err.detail || 'Google sign-in failed', 'error');
+              setAuthError(errorText);
+              showToast(errorText, 'error');
               window.history.replaceState({}, document.title, '/');
             }
-          } catch (err) {
+          } catch (err: any) {
             console.error('Callback error:', err);
+            const msg = err?.message || 'Network error during Google sign-in';
+            setAuthError(msg);
             if (window.opener) window.close();
             window.history.replaceState({}, document.title, '/');
           }
@@ -122,10 +144,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (event.data?.type === 'LIMO_AUTH_SUCCESS') {
         const loggedUser: User = event.data.user;
         setUser(loggedUser);
+        authedRef.current = true;
         setIsLoginModalOpen(false);
+        setAuthError(null);
         showToast(`Signed in as ${loggedUser.display_name || loggedUser.email}`, 'success');
       } else if (event.data?.type === 'LIMO_AUTH_ERROR') {
-        showToast(event.data.error || 'Google authentication failed', 'error');
+        const errMsg = event.data.error || 'Google authentication failed';
+        setAuthError(errMsg);
+        showToast(errMsg, 'error');
       }
     };
 
@@ -140,12 +166,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Trigger Google OAuth sign-in flow
   const loginWithGoogle = async () => {
+    setAuthError(null);
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+
       const res = await fetch('/api/v1/auth/login', {
         credentials: 'include',
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
+
       if (!res.ok) {
-        throw new Error('Failed to initialize Google authentication');
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || errData.message || 'Failed to initialize Google authentication');
       }
 
       const data = await res.json();
@@ -156,8 +190,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // Open a centered Google OAuth popup
-      const width = 500;
-      const height = 620;
+      const width = 520;
+      const height = 650;
       const left = window.screenX + (window.outerWidth - width) / 2;
       const top = window.screenY + (window.outerHeight - height) / 2;
 
@@ -173,17 +207,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      // Check for popup closed without completion
+      // Track popup closure
       const timer = setInterval(() => {
         if (popup.closed) {
           clearInterval(timer);
-          // Check session once popup closes
-          checkSession();
+          setTimeout(() => {
+            if (!authedRef.current) {
+              checkSession().then(() => {
+                if (!authedRef.current) {
+                  setAuthError('Google sign-in window was closed without completing authorization.');
+                }
+              });
+            }
+          }, 800);
         }
-      }, 800);
+      }, 500);
     } catch (err: any) {
       console.error('Google login error:', err);
-      showToast(err.message || 'Could not connect to Google sign-in', 'error');
+      const errMsg = err?.message || 'Could not connect to Google sign-in';
+      setAuthError(errMsg);
+      showToast(errMsg, 'error');
     }
   };
 
@@ -193,17 +236,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         method: 'POST',
         credentials: 'include',
       });
+    } catch (err) {
+      console.warn('Logout error:', err);
+    } finally {
       setUser(null);
+      authedRef.current = false;
       setIsLoginModalOpen(true);
       showToast('Logged out successfully', 'info');
-    } catch (err) {
-      console.error('Logout error:', err);
-      setUser(null);
-      setIsLoginModalOpen(true);
     }
   };
 
-  // True if user is logged in with a real Google account or running on local desktop surface
   const isAuthenticated = Boolean(user && (user.provider === 'google' || user.provider === 'desktop'));
 
   return (
@@ -213,11 +255,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isAuthenticated,
         isLoading,
         isLoginModalOpen,
+        authError,
         openLoginModal,
         closeLoginModal,
         loginWithGoogle,
         logout,
         checkSession,
+        clearAuthError,
       }}
     >
       {children}

@@ -272,7 +272,8 @@ class OpenMontageClient:
             return result_data
 
         except subprocess.TimeoutExpired as exc:
-            logger.error("OpenMontage execution timed out after %s seconds, terminating child process", timeout)
+            stderr_full = "\n".join(stderr_lines)
+            logger.error("OpenMontage execution timed out after %s seconds. Stderr tail:\n%s", timeout, stderr_full[-2000:] if stderr_full else "(empty)")
             if proc:
                 try:
                     proc.terminate()

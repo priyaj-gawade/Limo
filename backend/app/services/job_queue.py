@@ -340,48 +340,6 @@ class JobQueueManager:
                             )
                         summary["reconciled_completed"] += 1
                     else:
-                        # Check if job was dispatched to GitHub Actions and can be reconciled via GitHub API
-                        is_gh_job = bool(
-                            (job.worker_id and "github" in job.worker_id.lower())
-                            or (job.execution_id and "exec_gh" in job.execution_id.lower())
-                        )
-                        if is_gh_job:
-                            try:
-                                from .transformation.github_dispatcher import github_actions_dispatcher
-                                gh_run_id = None
-                                if job.worker_id and job.worker_id.startswith("gh_run_"):
-                                    gh_run_id = job.worker_id.replace("gh_run_", "")
-                                if gh_run_id and github_actions_dispatcher.is_configured():
-                                    status_info = github_actions_dispatcher.get_run_status(gh_run_id)
-                                    if status_info:
-                                        conclusion = status_info.get("conclusion")
-                                        if conclusion == "success":
-                                            logger.info("GitHub Run %s succeeded for job %s -> marking COMPLETED", gh_run_id, job.id)
-                                            with get_connection(self.db_path) as conn:
-                                                JobRepository.update_job_progress(
-                                                    conn=conn,
-                                                    job_id=job.id,
-                                                    state=JobState.COMPLETED,
-                                                    progress=1.0,
-                                                    current_stage="Completed in GitHub Actions",
-                                                )
-                                            summary["reconciled_completed"] += 1
-                                            continue
-                                        elif conclusion in ("failure", "cancelled", "timed_out"):
-                                            logger.info("GitHub Run %s concluded with %s for job %s", gh_run_id, conclusion, job.id)
-                                            with get_connection(self.db_path) as conn:
-                                                JobRepository.update_job_progress(
-                                                    conn=conn,
-                                                    job_id=job.id,
-                                                    state=JobState.FAILED if conclusion != "cancelled" else JobState.CANCELLED,
-                                                    progress=job.progress,
-                                                    current_stage=f"GitHub run {conclusion}",
-                                                    error=f"Cloud render {conclusion} on GitHub Actions",
-                                                )
-                                            summary["marked_failed"] += 1
-                                            continue
-                            except Exception as ghe:
-                                logger.debug("Could not query GitHub run status during reconciliation: %s", ghe)
                         # Missing artifacts after reboot
                         if job.attempt_count < 2:
                             logger.info("Re-queueing interrupted job '%s' (attempt %d/2)", job.id, job.attempt_count)

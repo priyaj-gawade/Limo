@@ -4,6 +4,7 @@ import { HomeScreen } from './components/HomeScreen';
 import { ChatView } from './components/ChatView';
 import { ConfirmModal } from './components/ConfirmModal';
 import { LoginModal } from './components/LoginModal';
+import { FeatureInfoModal, FeatureInfoType } from './components/FeatureInfoModal';
 import { useToast } from './context/ToastContext';
 import { useAuth } from './context/AuthContext';
 import { LogIn } from 'lucide-react';
@@ -18,6 +19,17 @@ const THEME_STORAGE_KEY = 'limo_theme';
 export const App: React.FC = () => {
   const { user, isAuthenticated, isLoginModalOpen, openLoginModal, closeLoginModal, logout } = useAuth();
   const [currentView, setCurrentView] = useState<'limo' | 'genoffice'>('limo');
+  const [featureInfoType, setFeatureInfoType] = useState<FeatureInfoType | null>(null);
+
+  const isDesktop = (): boolean => {
+    if (typeof window === 'undefined') return false;
+    return Boolean(
+      (window as any).electron ||
+      (window as any).electronAPI ||
+      navigator.userAgent.includes('Electron') ||
+      (window as any).__LIMO_DESKTOP__
+    );
+  };
 
   // Theme state with localStorage persistence and system theme fallback
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -235,6 +247,17 @@ export const App: React.FC = () => {
   };
 
   const handleSelectMode = (mode: FeatureMode) => {
+    if (!isDesktop()) {
+      if (mode === 'code') {
+        setFeatureInfoType('code');
+        return;
+      }
+      if (mode === 'websites') {
+        setFeatureInfoType('website');
+        return;
+      }
+    }
+
     if (!isAuthenticated && mode !== 'none') {
       openLoginModal();
       showToast('Please sign in with Google to use creation modes', 'info');
@@ -452,7 +475,11 @@ export const App: React.FC = () => {
   };
 
   const handleGenOfficeNavClick = () => {
-    showToast('GenOffice: Connected for local desktop automation and editing.');
+    if (isDesktop()) {
+      setCurrentView('genoffice');
+    } else {
+      setFeatureInfoType('office');
+    }
   };
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
@@ -521,6 +548,13 @@ export const App: React.FC = () => {
       <LoginModal
         isOpen={isLoginModalOpen}
         onClose={closeLoginModal}
+      />
+
+      {/* Three Web-Only Information Popups for Office, Code, and Website */}
+      <FeatureInfoModal
+        isOpen={!!featureInfoType}
+        type={featureInfoType}
+        onClose={() => setFeatureInfoType(null)}
       />
 
       <style>{`

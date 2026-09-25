@@ -137,7 +137,7 @@ class OpenMontageVideoAdapter:
                     pass
 
         # 3. Invoke OpenMontage isolated runner subprocess
-        timeout_sec = 240.0
+        timeout_sec = 360.0
         try:
             result = self.client.run_contract(
                 contract=contract_dict,

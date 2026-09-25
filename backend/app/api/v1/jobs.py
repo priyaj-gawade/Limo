@@ -27,7 +27,6 @@ from ...services.artifact_service import artifact_service
 from ...services.job_service import job_service
 from ...services.source_service import source_service
 from ...services.transformation.event_broker import event_broker
-from ...services.transformation.github_dispatcher import github_actions_dispatcher
 from ...storage.service import storage_service
 
 logger = logging.getLogger("limo.api.jobs")
@@ -101,18 +100,6 @@ async def cancel_job(
     """Cancel an active or queued transformation job with cooperative worker signaling."""
     job = job_service.get_job(job_id)
     authorize_resource(job.user_id, current_user)
-
-    # If GitHub Actions is actively rendering this job, dispatch remote cancellation
-    if github_actions_dispatcher.is_configured():
-        run_id = None
-        if job.configuration and isinstance(job.configuration.format_overrides, dict):
-            run_id = job.configuration.format_overrides.get("github_run_id")
-        if not run_id and job.worker_id and job.worker_id.startswith("gh_run_"):
-            run_id = job.worker_id.replace("gh_run_", "")
-        if run_id:
-            logger.info("Triggering remote GitHub Actions run cancellation: %s", run_id)
-            github_actions_dispatcher.cancel_workflow_run(str(run_id))
-
     return job_service.cancel_job(job_id)
 
 

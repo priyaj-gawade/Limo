@@ -336,6 +336,11 @@ class LimoAgentRuntime:
 
             except Exception as e:
                 logger.warning("Web URL pre-hydration failed for '%s': %s", resolution.target_url, e)
+                if not context.prompt_context_snippet:
+                    context.prompt_context_snippet = (
+                        f"[Note: Direct web scraping for '{resolution.target_url}' was restricted by anti-bot protection. "
+                        "Please synthesize a clear conceptual breakdown and overview based on the article title and topic in plain text.]"
+                    )
 
         elif resolution.needs_youtube:
             try:
@@ -859,20 +864,7 @@ class LimoAgentRuntime:
                     )
 
                     if artifact is None:
-                        summary = f"Queued video cloud render (Job ID: {job.id}) via GitHub Actions."
-                        content = (
-                            f"I have initiated cloud rendering for your video: **{planned_deliv.title}**.\n\n"
-                            f"The task has been dispatched to GitHub Actions for heavy compute generation (Job ID: `{job.id}`).\n\n"
-                            f"The render is executing in the background and will update your session as soon as the deliverable is completed."
-                        )
-                        assistant_msg = self.chat_svc.add_assistant_message(
-                            session_id=session_id,
-                            content=content,
-                            mode=mode or FeatureMode.VIDEO,
-                            artifact_ids=[],
-                            execution_summary=summary,
-                        )
-                        return assistant_msg
+                        raise RuntimeError(f"Video generation failed for '{planned_deliv.title}' on EC2 video engine.")
 
                     dur_info = artifact.metadata.get("duration_seconds", target_dur) if artifact.metadata else target_dur
                     summary = f"Generated {dur_info}s video '{artifact.title}.mp4' via D6 and OpenMontage isolated runner."
@@ -1043,20 +1035,7 @@ class LimoAgentRuntime:
                     )
 
                     if artifact is None:
-                        summary = f"Queued {aspect_ratio} infographic cloud render (Job ID: {job.id}) via GitHub Actions."
-                        content = (
-                            f"I have initiated cloud rendering for your infographic: **{planned_deliv.title}** ({aspect_ratio}).\n\n"
-                            f"The task has been dispatched to GitHub Actions for heavy compute generation (Job ID: `{job.id}`).\n\n"
-                            f"The render is executing in the background and will update your session as soon as the deliverable is completed."
-                        )
-                        assistant_msg = self.chat_svc.add_assistant_message(
-                            session_id=session_id,
-                            content=content,
-                            mode=mode or FeatureMode.NONE,
-                            artifact_ids=[],
-                            execution_summary=summary,
-                        )
-                        return assistant_msg
+                        raise RuntimeError(f"Infographic generation failed for '{planned_deliv.title}' on EC2 Prismo engine.")
 
                     summary = f"Generated {aspect_ratio} infographic poster '{artifact.title}.png' via D6 and Prismo design engine."
                     content = (

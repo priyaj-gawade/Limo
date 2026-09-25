@@ -6,6 +6,7 @@ from .infographic_adapter import NativeInfographicAdapter
 from .markdown_adapter import NativeHtmlAdapter, NativeMarkdownAdapter
 from .social_adapter import NativeSocialAdapter
 from .video_adapter import OpenMontageVideoAdapter
+from .genoffice_adapter import GenOfficeAdapter
 
 __all__ = [
     "BaseNativeAdapter",
@@ -16,5 +17,6 @@ __all__ = [
     "NativeInfographicAdapter",
     "OpenMontageVideoAdapter",
     "PrismoImageAdapter",
+    "GenOfficeAdapter",
 ]
 

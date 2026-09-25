@@ -8,10 +8,14 @@ from .models import ModelQuota, RouteKey, UsageRecord
 
 logger = logging.getLogger("limo.agent.llm.quota")
 
-# Initial observations from user's active quota charts (configurable and updateable, MUST-FIX #2)
+# Configured model quotas based on active provider tiers (Flash-Lite: RPM=15, RPD=1000; Flash: RPM=5, RPD=20)
 DEFAULT_MODEL_QUOTAS: Dict[str, ModelQuota] = {
-    "gemini-3.5-flash-lite": ModelQuota(rpm=15, tpm=250000, rpd=500, safety_margin=1.0),
-    "gemini-3.1-flash-lite": ModelQuota(rpm=15, tpm=250000, rpd=500, safety_margin=1.0),
+    "gemini-flash-lite-latest": ModelQuota(rpm=15, tpm=250000, rpd=1000, safety_margin=1.0),
+    "gemini-3.5-flash-lite": ModelQuota(rpm=15, tpm=250000, rpd=1000, safety_margin=1.0),
+    "gemini-3.6-flash": ModelQuota(rpm=5, tpm=250000, rpd=20, safety_margin=1.0),
+    "gemini-3.5-flash": ModelQuota(rpm=5, tpm=250000, rpd=20, safety_margin=1.0),
+    "gemini-3.7-flash": ModelQuota(rpm=5, tpm=250000, rpd=20, safety_margin=1.0),
+    "gemini-3.8-flash": ModelQuota(rpm=5, tpm=250000, rpd=20, safety_margin=1.0),
 }
 
 
@@ -34,6 +38,10 @@ class QuotaTracker:
         self._history: Dict[RouteKey, List[UsageRecord]] = {}
         # Cooldown expiration timestamps per RouteKey
         self._cooldowns: Dict[RouteKey, float] = {}
+        # Credential-wide cooldown timestamps (e.g. project-level 429)
+        self._cred_cooldowns: Dict[str, float] = {}
+        # Model-wide cooldown timestamps (e.g. provider 503 high demand spikes)
+        self._model_cooldowns: Dict[str, float] = {}
 
     def configure_quota(self, model_name: str, quota: ModelQuota) -> None:
         """Update quota configuration for a model dynamically (MUST-FIX #2)."""
@@ -42,29 +50,69 @@ class QuotaTracker:
 
     def get_quota(self, model_name: str) -> ModelQuota:
         """Retrieve quota for model with fallback default."""
-        return self._quotas.get(model_name, ModelQuota(rpm=5, tpm=100000, rpd=20, safety_margin=0.9))
+        return self._quotas.get(model_name, ModelQuota(rpm=5, tpm=250000, rpd=20, safety_margin=1.0))
 
-    def record_rate_limit(self, route: RouteKey, cooldown_sec: float = 60.0) -> None:
-        """Authorize provider 429 feedback to override local capacity and engage cooldown (MUST-FIX #3)."""
+    def record_rate_limit(
+        self,
+        route: RouteKey,
+        cooldown_sec: float = 60.0,
+        credential_wide: bool = False,
+        model_wide: bool = False,
+    ) -> None:
+        """Authorize provider 429/503 feedback to override local capacity and engage cooldown (MUST-FIX #3)."""
         expires_at = time.time() + cooldown_sec
         self._cooldowns[route] = expires_at
-        logger.warning(
-            "Engaged cooldown on route [%s] for %.1fs (expires at %.1f)",
-            route.to_string(),
-            cooldown_sec,
-            expires_at,
-        )
+        if credential_wide:
+            self._cred_cooldowns[route.credential_id] = expires_at
+            logger.warning(
+                "Engaged credential-wide cooldown on credential [%s] for %.1fs (expires at %.1f)",
+                route.credential_id,
+                cooldown_sec,
+                expires_at,
+            )
+        elif model_wide:
+            self._model_cooldowns[route.model_name] = expires_at
+            logger.warning(
+                "Engaged model-wide cooldown on model [%s] for %.1fs (expires at %.1f)",
+                route.model_name,
+                cooldown_sec,
+                expires_at,
+            )
+        else:
+            logger.warning(
+                "Engaged cooldown on route [%s] for %.1fs (expires at %.1f)",
+                route.to_string(),
+                cooldown_sec,
+                expires_at,
+            )
 
     def is_in_cooldown(self, route: RouteKey) -> bool:
-        """Check if route is currently in cooldown."""
+        """Check if route (or its parent credential/model) is currently in cooldown."""
+        now = time.time()
+        if now < self._cred_cooldowns.get(route.credential_id, 0.0):
+            return True
+        if now < self._model_cooldowns.get(route.model_name, 0.0):
+            return True
         expires_at = self._cooldowns.get(route, 0.0)
-        return time.time() < expires_at
+        return now < expires_at
 
     def get_cooldown_remaining(self, route: RouteKey) -> float:
         """Get seconds remaining in active cooldown, or 0.0 if not cooling down."""
-        expires_at = self._cooldowns.get(route, 0.0)
-        remaining = expires_at - time.time()
-        return max(0.0, remaining)
+        now = time.time()
+        cred_remaining = self._cred_cooldowns.get(route.credential_id, 0.0) - now
+        model_remaining = self._model_cooldowns.get(route.model_name, 0.0) - now
+        route_remaining = self._cooldowns.get(route, 0.0) - now
+        return max(0.0, cred_remaining, model_remaining, route_remaining)
+
+    def get_credential_rpm(self, credential_id: str, window_sec: float = 60.0) -> int:
+        """Return total requests recorded across all models for this credential in sliding window."""
+        now = time.time()
+        cutoff = now - window_sec
+        count = 0
+        for route, records in self._history.items():
+            if route.credential_id == credential_id:
+                count += sum(1 for r in records if r.timestamp >= cutoff)
+        return count
 
     def _prune_history(self, route: RouteKey, now: float) -> List[UsageRecord]:
         """Prune records older than 24 hours."""

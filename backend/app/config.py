@@ -33,11 +33,11 @@ class Settings(BaseSettings):
     gemini_key_3: Optional[str] = None
     gemini_api_key: Optional[str] = None
     gemini_api_keys: Optional[str] = None
-    primary_model: str = "gemini-3.5-flash-lite"
-    fallback_models: List[str] = ["gemini-3.1-flash-lite"]
-    llm_max_retries: int = 3
-    llm_cooldown_duration_sec: float = 60.0
-    llm_timeout_sec: float = 30.0
+    primary_model: str = "gemini-flash-lite-latest"
+    fallback_models: List[str] = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash"]
+    llm_max_retries: int = 6
+    llm_cooldown_duration_sec: float = 15.0
+    llm_timeout_sec: float = 75.0
     llm_safety_margin: float = 1.0
     default_retrieval_token_budget: int = 2000
 
@@ -58,6 +58,11 @@ class Settings(BaseSettings):
 
     # Storage & Surface Boundaries
     limo_surface: str = "desktop"  # "desktop" or "web"
+
+    @property
+    def surface(self) -> str:
+        """Alias for limo_surface to support both settings.surface and settings.limo_surface."""
+        return self.limo_surface
     database_url: Optional[str] = None
     data_dir: str = "data"
     db_name: str = "limo.db"

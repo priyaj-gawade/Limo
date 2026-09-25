@@ -193,7 +193,7 @@ class VideoCompose(BaseTool):
             },
             "codec": {"type": "string", "default": "libx264"},
             "crf": {"type": "integer", "default": 23},
-            "preset": {"type": "string", "default": "medium"},
+            "preset": {"type": "string", "default": "veryfast"},
             "remotion_timeout_ms": {
                 "type": "integer",
                 "description": (
@@ -452,7 +452,7 @@ class VideoCompose(BaseTool):
         subtitle_path = inputs.get("subtitle_path")
         codec = inputs.get("codec", "libx264")
         crf = inputs.get("crf", 23)
-        preset = inputs.get("preset", "medium")
+        preset = inputs.get("preset", "veryfast")
         profile_name = inputs.get("profile")
 
         # Resolve target resolution + fit mode. Priority: explicit `profile`

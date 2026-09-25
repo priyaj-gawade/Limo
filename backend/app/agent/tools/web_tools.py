@@ -15,7 +15,6 @@ from ..context import AgentContext
 from ..contracts import BaseTool, PermissionType, ToolResult
 from ...services.extraction.ssrf import SSRFProtectionError
 from ...services.web.base import WebSearchClient, get_default_search_client
-from ...services.web.google_search import GoogleSearchClient, google_search_client
 from ...services.web.research_orchestrator import WebResearchService, web_research_service
 from ...services.web.web_content_client import WebContentClient, web_content_client
 from ...services.web.youtube_search import YouTubeSearchClient, youtube_search_client

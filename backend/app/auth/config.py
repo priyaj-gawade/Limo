@@ -58,11 +58,20 @@ def load_auth_config(repo_root: Optional[Path] = None) -> AuthConfig:
     """Load auth config from environment variables or local credentials/google_auth.json."""
     surface = os.getenv("LIMO_SURFACE", "desktop").lower()
 
+    if surface == "web":
+        default_redirect_uri = "https://api.limo-ai.online/api/v1/auth/google/callback"
+        default_frontend_url = "https://app.limo-ai.online"
+        default_cookie_domain = ".limo-ai.online"
+    else:
+        default_redirect_uri = "http://localhost:8000/api/v1/auth/google/callback"
+        default_frontend_url = "http://localhost:5190"
+        default_cookie_domain = None
+
     client_id = os.getenv("GOOGLE_CLIENT_ID")
     client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
-    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/api/v1/auth/google/callback")
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5190")
-    cookie_domain = os.getenv("COOKIE_DOMAIN")
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", default_redirect_uri)
+    frontend_url = os.getenv("FRONTEND_URL", default_frontend_url)
+    cookie_domain = os.getenv("COOKIE_DOMAIN", default_cookie_domain)
 
     # Fallback to credentials/google_auth.json if environment variables are not set
     if not client_id or not client_secret:
@@ -76,7 +85,14 @@ def load_auth_config(repo_root: Optional[Path] = None) -> AuthConfig:
                 client_secret = client_secret or web_data.get("client_secret")
                 uris = web_data.get("redirect_uris", [])
                 if uris and not os.getenv("GOOGLE_REDIRECT_URI"):
-                    redirect_uri = next((u for u in uris if "google/callback" in u), uris[0])
+                    if surface == "web":
+                        matched = next((u for u in uris if "limo-ai.online" in u and "google/callback" in u), None)
+                        if matched:
+                            redirect_uri = matched
+                    else:
+                        matched = next((u for u in uris if "localhost" in u and "google/callback" in u), None)
+                        if matched:
+                            redirect_uri = matched
             except Exception as e:
                 logger.warning("Failed to parse credentials/google_auth.json: %s", e)
 

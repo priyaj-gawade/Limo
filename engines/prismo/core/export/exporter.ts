@@ -215,38 +215,37 @@ export class HeadlessExporter {
       targetUrl = pathToFileURL(path.resolve(urlOrPath)).href;
     }
 
+    const isLinux = process.platform === 'linux';
     const args = [
       '--headless=new',
-      '--enable-webgl',
-      '--ignore-gpu-blocklist',
-      '--use-gl=angle',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
       '--hide-scrollbars',
       '--no-sandbox',
       '--allow-file-access-from-files',
       '--force-device-scale-factor=1',
       '--disable-background-timer-throttling',
-      '--run-all-compositor-stages-before-draw',
-      '--virtual-time-budget=2500',
       `--window-size=${width},${height}`,
       `--screenshot=${outPath}`,
       targetUrl
     ];
 
+    if (!isLinux) {
+      args.splice(1, 0, '--enable-webgl', '--ignore-gpu-blocklist', '--use-gl=angle');
+    }
+
     const result = await runProcessAsync(browserBin, args, {
-      timeout: 15000,
+      timeout: 45000,
       windowsHide: true,
       signal: options.signal
     });
 
     if (result.error) {
-      throw new Error(`Headless screenshot failed: ${result.error.message}`);
-    }
-
-    if (!fs.existsSync(outPath)) {
       // Fallback with classic --headless
       const fallbackArgs = [
         '--headless',
         '--disable-gpu',
+        '--disable-dev-shm-usage',
         '--hide-scrollbars',
         '--no-sandbox',
         '--force-device-scale-factor=1',
@@ -254,11 +253,11 @@ export class HeadlessExporter {
         `--screenshot=${outPath}`,
         targetUrl
       ];
-      await runProcessAsync(browserBin, fallbackArgs, { timeout: 15000, windowsHide: true, signal: options.signal });
+      await runProcessAsync(browserBin, fallbackArgs, { timeout: 45000, windowsHide: true, signal: options.signal });
     }
 
     if (!fs.existsSync(outPath)) {
-      throw new Error(`Headless screenshot completed with code ${result.status} but output file not created at ${outPath}`);
+      throw new Error(`Headless screenshot failed or output file not created at ${outPath}`);
     }
 
     // Binary Image Validation

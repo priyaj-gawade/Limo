@@ -130,11 +130,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
               if (onGenOfficeClick) onGenOfficeClick();
               else onViewChange('genoffice');
             }}
-            title="GenOffice"
-            aria-label="GenOffice"
+            title="Office"
+            aria-label="Office"
           >
             <LayoutGrid size={14} />
-            {!collapsed && <span>GenOffice</span>}
+            {!collapsed && <span>Office</span>}
           </button>
         </div>
       </div>
@@ -274,13 +274,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </>
               )}
             </button>
-            <button
+            <a
+              href="https://github.com/priyaj-gawade/Limo"
+              target="_blank"
+              rel="noopener noreferrer"
               className="download-app-btn"
               title="Download Desktop App"
-              onClick={() => showToast('Limo Desktop v1.0 is installed and active', 'success')}
+              aria-label="Download Desktop App"
             >
               <ArrowDownToLine size={15} />
-            </button>
+            </a>
           </div>
         )}
       </div>
@@ -859,6 +862,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           padding: 5px;
           border-radius: var(--radius-sm);
           transition: all 0.12s ease;
+          text-decoration: none;
         }
 
         .download-app-btn:hover {

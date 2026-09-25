@@ -24,6 +24,7 @@ from .adapters.infographic_adapter import NativeInfographicAdapter
 from .adapters.markdown_adapter import NativeHtmlAdapter, NativeMarkdownAdapter
 from .adapters.social_adapter import NativeSocialAdapter
 from .adapters.video_adapter import OpenMontageVideoAdapter
+from .adapters.genoffice_adapter import GenOfficeAdapter
 from .contracts import generation_contract_builder
 
 logger = logging.getLogger("limo.services.transformation.engine_router")
@@ -37,7 +38,7 @@ class EngineRouter:
             format=OutputFormat.DOCUMENT,
             engine_type=EngineType.GENOFFICE_DOCS,
             target_extension=".docx",
-            is_implemented=False,
+            is_implemented=True,
             target_phase="D7 (GenOffice)",
             dispatch_endpoint="/api/v1/genoffice/docs",
         ),
@@ -45,7 +46,7 @@ class EngineRouter:
             format=OutputFormat.PRESENTATION,
             engine_type=EngineType.GENOFFICE_SLIDES,
             target_extension=".pptx",
-            is_implemented=False,
+            is_implemented=True,
             target_phase="D7 (GenOffice)",
             dispatch_endpoint="/api/v1/genoffice/slides",
         ),
@@ -53,7 +54,7 @@ class EngineRouter:
             format=OutputFormat.SPREADSHEET,
             engine_type=EngineType.GENOFFICE_SHEETS,
             target_extension=".xlsx",
-            is_implemented=False,
+            is_implemented=True,
             target_phase="D7 (GenOffice)",
             dispatch_endpoint="/api/v1/genoffice/sheets",
         ),
@@ -61,7 +62,7 @@ class EngineRouter:
             format=OutputFormat.ADVISORY,
             engine_type=EngineType.GENOFFICE_DOCS,
             target_extension=".docx",
-            is_implemented=False,
+            is_implemented=True,
             target_phase="D7 (GenOffice)",
             dispatch_endpoint="/api/v1/genoffice/docs",
         ),
@@ -69,7 +70,7 @@ class EngineRouter:
             format=OutputFormat.SUMMARY,
             engine_type=EngineType.GENOFFICE_DOCS,
             target_extension=".docx",
-            is_implemented=False,
+            is_implemented=True,
             target_phase="D7 (GenOffice)",
             dispatch_endpoint="/api/v1/genoffice/docs",
         ),
@@ -77,7 +78,7 @@ class EngineRouter:
             format=OutputFormat.PDF,
             engine_type=EngineType.GENOFFICE_DOCS,
             target_extension=".pdf",
-            is_implemented=False,
+            is_implemented=True,
             target_phase="D7 (GenOffice)",
             dispatch_endpoint="/api/v1/genoffice/docs",
         ),
@@ -140,13 +141,14 @@ class EngineRouter:
     }
 
     def __init__(self):
-        # Instantiate singleton adapters for native formats, video, and prismo
+        # Instantiate singleton adapters for native formats, video, prismo, and GenOffice
         self._markdown_adapter = NativeMarkdownAdapter()
         self._html_adapter = NativeHtmlAdapter()
         self._social_adapter = NativeSocialAdapter()
         self._infographic_adapter = NativeInfographicAdapter()  # Preserved for backward reference
         self._prismo_adapter = PrismoImageAdapter()             # Authoritative D8.8 poster engine
         self._video_adapter = OpenMontageVideoAdapter()
+        self._genoffice_adapter = GenOfficeAdapter()            # Authoritative D7 office engine
         self._native_adapters: Dict[OutputFormat, Any] = {
             OutputFormat.MARKDOWN: self._markdown_adapter,
             OutputFormat.HTML: self._html_adapter,
@@ -154,6 +156,12 @@ class EngineRouter:
             OutputFormat.TWITTER: self._social_adapter,
             OutputFormat.INFOGRAPHIC: self._prismo_adapter,
             OutputFormat.VIDEO: self._video_adapter,
+            OutputFormat.DOCUMENT: self._genoffice_adapter,
+            OutputFormat.PRESENTATION: self._genoffice_adapter,
+            OutputFormat.SPREADSHEET: self._genoffice_adapter,
+            OutputFormat.ADVISORY: self._genoffice_adapter,
+            OutputFormat.SUMMARY: self._genoffice_adapter,
+            OutputFormat.PDF: self._genoffice_adapter,
         }
 
     def get_route(self, fmt: OutputFormat) -> EngineRoute:
@@ -174,7 +182,7 @@ class EngineRouter:
         if not adapter:
             raise UnsupportedFormatError(
                 raw_format=fmt.value,
-                supported_formats=["markdown", "html", "linkedin", "twitter", "infographic", "video"],
+                supported_formats=[f.value for f in OutputFormat],
             )
         return adapter
 
@@ -202,48 +210,8 @@ class EngineRouter:
                 target_phase=route.target_phase,
             )
 
-        # Implemented native engine execution
+        # Direct native engine execution on EC2 host
         if deliverable and (canonical or unified_input):
-            is_heavy = deliverable.format in (OutputFormat.VIDEO, OutputFormat.INFOGRAPHIC)
-
-            if is_heavy:
-                # Primary Cloud Path: GitHub Actions On-Demand Dispatcher
-                from .github_dispatcher import github_actions_dispatcher
-                if github_actions_dispatcher.is_configured():
-                    import uuid
-                    resolved_job_id = job_id or f"job_{uuid.uuid4().hex[:12]}"
-                    artifact_id = f"art_gh_{uuid.uuid4().hex[:12]}"
-                    execution_id = f"exec_{uuid.uuid4().hex[:12]}"
-                    format_str = "video" if deliverable.format == OutputFormat.VIDEO else "infographic"
-
-                    opts = deliverable.options or {}
-                    aspect_ratio = opts.get("aspect_ratio", "3:4")
-                    user_directive = opts.get("user_directive") or (canonical.intent.core_narrative if canonical and canonical.intent else "")
-
-                    dispatched = github_actions_dispatcher.dispatch_render_job(
-                        job_id=resolved_job_id,
-                        execution_id=execution_id,
-                        attempt=1,
-                        target_format=format_str,
-                        artifact_id=artifact_id,
-                        title=deliverable.title,
-                        directive=user_directive,
-                        aspect_ratio=aspect_ratio,
-                    )
-                    if dispatched:
-                        if progress_callback:
-                            progress_callback("github_dispatch", "Dispatched on-demand cloud render to GitHub Actions")
-                        logger.info(
-                            "Dispatched cloud render to GitHub Actions for job %s (exec_id: %s, artifact_id: %s). Returning None for asynchronous lifecycle.",
-                            resolved_job_id,
-                            execution_id,
-                            artifact_id,
-                        )
-                        return None
-
-                # Fallback: native in-process adapter (uses Playwright Chromium on Render)
-                logger.info("GitHub Actions dispatch unavailable or failed. Using native in-process adapter for %s.", deliverable.format.value)
-
             adapter = self.get_native_adapter(deliverable.format)
             effective_config = config or GenerationConfig()
 

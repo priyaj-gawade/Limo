@@ -42,18 +42,15 @@ class WebSearchClient(Protocol):
 def get_default_search_client() -> WebSearchClient:
     """Resolve the active WebSearchClient according to configuration.
 
-    Defaults strictly to DDGS (zero-configuration). Google Custom Search is only used
-    if explicitly configured via WEB_SEARCH_PROVIDER=google and valid credentials exist.
+    Defaults strictly to DDGS (zero-configuration).
+    Google Custom Search API is deprecated and disabled in Limo.
     """
     provider = os.getenv("WEB_SEARCH_PROVIDER", "ddgs").strip().lower()
 
     if provider == "google":
-        from .google_search import google_search_client
-        if google_search_client.is_configured():
-            return google_search_client
         logger.warning(
-            "WEB_SEARCH_PROVIDER=google requested but Google credentials are missing/invalid. "
-            "Falling back to zero-config DDGS provider."
+            "WEB_SEARCH_PROVIDER=google was requested, but Google Custom Search API is deprecated "
+            "and disabled in Limo. Using zero-config DDGS provider."
         )
 
     from .ddgs_search import ddgs_search_client
@@ -61,15 +58,9 @@ def get_default_search_client() -> WebSearchClient:
 
 
 def get_fallback_search_client(current_provider: str = "ddgs") -> Optional[WebSearchClient]:
-    """Resolve a secondary search client for automatic provider fallback."""
-    curr = current_provider.strip().lower()
-    if curr == "ddgs":
-        from .google_search import google_search_client
-        if google_search_client.is_configured():
-            return google_search_client
-    elif curr == "google":
-        from .ddgs_search import ddgs_search_client
-        if ddgs_search_client.is_available:
-            return ddgs_search_client
+    """Resolve a secondary search client for automatic provider fallback.
+
+    Google Search is deprecated, so no external fallback provider is required when using DDGS.
+    """
     return None
 

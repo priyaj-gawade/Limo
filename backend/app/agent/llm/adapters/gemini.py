@@ -38,7 +38,16 @@ class GeminiAdapter(BaseProviderAdapter):
             loop_id = 0
         cache_key = (api_key, loop_id)
         if cache_key not in self._clients:
-            self._clients[cache_key] = genai.Client(api_key=api_key)
+            # Disable SDK-internal tenacity retries so our LLMProviderManager
+            # controls all retry/failover logic.  Without this the SDK silently
+            # retries 503s for ~50 seconds before surfacing the error.
+            no_retry_opts = types.HttpOptions(
+                retry_options=types.HttpRetryOptions(attempts=0)
+            )
+            self._clients[cache_key] = genai.Client(
+                api_key=api_key,
+                http_options=no_retry_opts,
+            )
         return self._clients[cache_key]
 
     async def generate(
@@ -105,7 +114,8 @@ class GeminiAdapter(BaseProviderAdapter):
                 call_contents = contents_list
 
         try:
-            # Enforce async timeout
+            # Enforce async timeout (SDK retries are disabled at client level,
+            # so this timeout only covers a single network round-trip)
             response = await asyncio.wait_for(
                 client.aio.models.generate_content(
                     model=model_name,
@@ -162,6 +172,20 @@ class GeminiAdapter(BaseProviderAdapter):
 
         # Extract text content
         text_content = getattr(response, "text", None)
+
+        # Guard against empty generation / malformed function call: trigger failover rotation
+        if not text_content and not function_calls:
+            candidates = getattr(response, "candidates", None) or []
+            finish_reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+            logger.warning(
+                "Gemini model '%s' returned empty text and zero function calls (finish_reason=%s)",
+                model_name,
+                finish_reason,
+            )
+            raise ProviderServerError(
+                f"Model '{model_name}' completed with empty text (finish_reason={finish_reason})",
+                status_code=502,
+            )
 
         return LLMResponse(
             text=text_content,

@@ -5,7 +5,7 @@ import logging
 import os
 import random
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from ...config import settings
 from .adapters.base import (
@@ -149,29 +149,68 @@ class LLMProviderManager:
                     )
         return routes
 
-    def select_route(self, estimated_tokens: int = 500) -> Optional[RouteKey]:
-        """Select the highest-priority available route using round-robin credential rotation.
+    def select_route(
+        self,
+        estimated_tokens: int = 500,
+        exclude_routes: Optional[Set[RouteKey]] = None,
+    ) -> Optional[RouteKey]:
+        """Select the highest-priority available route using balanced least-loaded credential routing.
         
         Evaluates models in priority order (primary -> fallback).
-        Within each model, distributes requests round-robin across active credentials to balance
-        the 500 requests per key across all 3 keys (1000 requests per key = 3000 requests total).
+        Within each model:
+        1. Filters out credentials in cooldown or excluded this turn.
+        2. Sorts candidates by:
+           - Lowest 1-minute RPM across the credential (least loaded first)
+           - Round-robin offset tiebreaker for fair distribution among equal loads
+        3. Returns the first route with available quota capacity.
         """
         active_creds = [c for c in self.credentials if c.is_active]
         if not active_creds:
             return None
 
+        excluded = exclude_routes or set()
         n = len(active_creds)
+
         for model in self.get_model_chain():
-            start_offset = self._rr_index % n
-            for i in range(n):
-                cred = active_creds[(start_offset + i) % n]
+            candidates = []
+            for i, cred in enumerate(active_creds):
                 route = RouteKey(project_id=cred.project_id, credential_id=cred.id, model_name=model)
-                if self.quota_tracker.has_capacity(route, estimated_tokens=estimated_tokens):
-                    # Advance round-robin index for fair load distribution
-                    self._rr_index = (start_offset + i + 1) % n
-                    return route
+                if route in excluded:
+                    continue
+                if not self.quota_tracker.has_capacity(route, estimated_tokens=estimated_tokens):
+                    continue
+                rpm = self.quota_tracker.get_credential_rpm(cred.id)
+                rr_tiebreaker = (i - self._rr_index) % n
+                candidates.append((rpm, rr_tiebreaker, cred, route))
+
+            if candidates:
+                candidates.sort(key=lambda x: (x[0], x[1]))
+                best_cand = candidates[0]
+                best_route = best_cand[3]
+                best_cred_idx = active_creds.index(best_cand[2])
+                self._rr_index = (best_cred_idx + 1) % n
+                return best_route
 
         return None
+
+    def has_available_route(
+        self,
+        estimated_tokens: int = 500,
+        exclude_routes: Optional[Set[RouteKey]] = None,
+    ) -> bool:
+        """Check if an alternate route is available WITHOUT advancing round-robin index."""
+        active_creds = [c for c in self.credentials if c.is_active]
+        if not active_creds:
+            return False
+        excluded = exclude_routes or set()
+        for model in self.get_model_chain():
+            for cred in active_creds:
+                route = RouteKey(project_id=cred.project_id, credential_id=cred.id, model_name=model)
+                if route in excluded:
+                    continue
+                if self.quota_tracker.has_capacity(route, estimated_tokens=estimated_tokens):
+                    return True
+        return False
 
     def _get_credential_for_route(self, route: RouteKey) -> ProviderCredential:
         """Find the credential object matching a RouteKey."""
@@ -195,9 +234,9 @@ class LLMProviderManager:
         
         Guarantees:
         - Never loops indefinitely (bounded by max_retries or available routes).
-        - Exponential backoff with jitter on transient 429/5xx errors when all routes need cooldown.
+        - Exponential backoff with jitter on transient errors when all routes need cooldown.
         - Immediate failover without latency sleep if alternative fresh routes are available.
-        - Full coverage of 3 API keys x 2 models (gemini-3.5-flash-lite + gemini-3.1-flash-lite) = 3000 requests.
+        - Automatic multi-key round-robin rotation across active credentials.
         - Clear error messaging when credentials are missing.
         """
         self._total_requests += 1
@@ -212,22 +251,38 @@ class LLMProviderManager:
             )
 
         all_routes = self.get_all_routes()
-        # Ensure we can attempt all available permutations before exhausting retries
-        max_attempts = max(self.max_retries, len(all_routes))
+        max_attempts = max(self.max_retries * 3, len(all_routes) + 6)
+        attempted_routes: Set[RouteKey] = set()
 
         while attempt < max_attempts:
             attempt += 1
 
-            # 1. Preflight route selection
-            route = self.select_route(estimated_tokens=estimated_input_tokens)
+            # 1. Preflight route selection (prefer unattempted routes this turn)
+            route = self.select_route(estimated_tokens=estimated_input_tokens, exclude_routes=attempted_routes)
             if not route:
-                # All routes in cooldown or over local preflight limit
+                # If all unattempted routes are cooling down, check if any route has recovered
+                route = self.select_route(estimated_tokens=estimated_input_tokens)
+
+            if not route:
+                # If all routes are temporarily cooling down with a remaining timer, pause for recovery
+                min_remaining = min(
+                    (self.quota_tracker.get_cooldown_remaining(r) for r in all_routes),
+                    default=0.0,
+                )
+                if 0.0 < min_remaining <= 15.0 and attempt < max_attempts:
+                    sleep_sec = min_remaining + 0.3
+                    logger.info("All routes cooling down. Pausing %.2fs for route recovery...", sleep_sec)
+                    await asyncio.sleep(sleep_sec)
+                    route = self.select_route(estimated_tokens=estimated_input_tokens)
+
+            if not route:
                 self._total_failures += 1
                 raise AllRoutesExhaustedError(
                     f"All configured LLM routes ({len(all_routes)}) are currently in cooldown or quota exhausted. "
                     f"Last error: {last_error}"
                 )
 
+            attempted_routes.add(route)
             cred = self._get_credential_for_route(route)
             logger.info(
                 "Dispatching LLM request to route [%s] (key: %s, attempt: %d/%d)",
@@ -272,36 +327,55 @@ class LLMProviderManager:
                 return response
 
             except RateLimitExceededError as e:
-                # MUST-FIX #3: Authoritative provider 429 overrides local capacity
-                logger.warning("Provider 429 rate-limit received on route [%s]: engaging cooldown", route.to_string())
-                self.quota_tracker.record_rate_limit(route, cooldown_sec=self.cooldown_duration_sec)
+                # Provider 429 rate-limit received on route: engage credential cooldown
+                logger.warning("Provider 429 rate-limit received on route [%s]: engaging credential-wide cooldown", route.to_string())
+                self.quota_tracker.record_rate_limit(route, cooldown_sec=self.cooldown_duration_sec, credential_wide=True)
                 self._total_retries += 1
                 self._total_failovers += 1
                 retries_used += 1
                 last_error = e
 
-                # Ponytail optimization: If an alternate route is immediately ready, skip sleep and failover instantly
-                if self.select_route(estimated_tokens=estimated_input_tokens) is not None:
+                # Pace failover to respect provider RPM limits
+                if self.has_available_route(estimated_tokens=estimated_input_tokens, exclude_routes=attempted_routes):
+                    await asyncio.sleep(2.5)
                     continue
 
             except (ProviderServerError, TimeoutError) as e:
-                # Transient 5xx or timeout: exponential backoff with jitter
-                logger.warning("Transient error on route [%s]: %s", route.to_string(), str(e))
+                # Transient 5xx or timeout: engage route-specific cooldown
+                # Avoid model-wide lockout on a single 503 so other credentials and fresh models remain available
+                is_high_demand_503 = isinstance(e, ProviderServerError) and (
+                    getattr(e, "status_code", None) == 503 or "high demand" in str(e).lower()
+                )
+                cooldown_sec = 20.0 if is_high_demand_503 else 10.0
+                logger.warning(
+                    "Transient error on route [%s]: %s (engaging %.1fs route cooldown)",
+                    route.to_string(),
+                    str(e),
+                    cooldown_sec,
+                )
+                self.quota_tracker.record_rate_limit(
+                    route,
+                    cooldown_sec=cooldown_sec,
+                    model_wide=False,
+                )
                 self._total_retries += 1
+                self._total_failovers += 1
                 retries_used += 1
                 last_error = e
 
-                if self.select_route(estimated_tokens=estimated_input_tokens) is not None:
+                # Pace failover by 2.5s to avoid hammering provider endpoints during demand spikes
+                if self.has_available_route(estimated_tokens=estimated_input_tokens, exclude_routes=attempted_routes):
+                    await asyncio.sleep(2.5)
                     continue
 
             except ModelNotFoundError as e:
-                # Model is deprecated or unavailable for this project: put route in long cooldown
+                # Model is deprecated or unavailable: put route in long cooldown
                 logger.error("Model '%s' not available for route [%s]: %s", route.model_name, route.to_string(), str(e))
                 self.quota_tracker.record_rate_limit(route, cooldown_sec=3600.0)
                 self._total_failovers += 1
                 last_error = e
 
-                if self.select_route(estimated_tokens=estimated_input_tokens) is not None:
+                if self.has_available_route(estimated_tokens=estimated_input_tokens, exclude_routes=attempted_routes):
                     continue
 
             except AuthenticationError as e:
@@ -311,14 +385,14 @@ class LLMProviderManager:
                 self._total_failovers += 1
                 last_error = e
 
-                if self.select_route(estimated_tokens=estimated_input_tokens) is not None:
+                if self.has_available_route(estimated_tokens=estimated_input_tokens, exclude_routes=attempted_routes):
                     continue
 
             # If all immediate routes are cooling down, sleep with exponential backoff and jitter
             if attempt < max_attempts:
-                backoff_base = 0.5 * (2 ** (attempt - 1))
-                jitter = random.uniform(0.1, 0.5)
-                sleep_duration = min(backoff_base + jitter, 10.0)
+                backoff_base = 0.5 * (2 ** min(attempt - 1, 4))
+                jitter = random.uniform(0.1, 0.4)
+                sleep_duration = min(backoff_base + jitter, 5.0)
                 logger.info("All immediate routes busy. Retrying in %.2fs (backoff + jitter)...", sleep_duration)
                 await asyncio.sleep(sleep_duration)
 

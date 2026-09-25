@@ -57,7 +57,12 @@ def safe_init_env() -> None:
 
     # Map Limo credential aliases if standard keys are not already set
     if not os.environ.get("GEMINI_API_KEY"):
-        gemini_key = os.environ.get("GEMINI_KEY_1") or os.environ.get("GOOGLE_API_KEY")
+        gemini_key = (
+            os.environ.get("GEMINI_KEY_2")
+            or os.environ.get("GEMINI_KEY_3")
+            or os.environ.get("GEMINI_KEY_1")
+            or os.environ.get("GOOGLE_API_KEY")
+        )
         if gemini_key:
             os.environ["GEMINI_API_KEY"] = gemini_key
             os.environ.setdefault("GOOGLE_API_KEY", gemini_key)
@@ -398,14 +403,22 @@ class LimoRunner:
             self.log(f"script prepared from contract: {len(scenes)} scenes")
             return scenes
 
-        # Use Gemini 3.1 Flash Lite for structured scene planning from sanitized VideoBrief
-        gemini_key = os.environ.get("GEMINI_API_KEY")
-        if not gemini_key:
-            raise RuntimeError("GEMINI_API_KEY is not set for script/scene planning.")
+        # Multi-key, multi-model resilient scene planning using high-quota Flash-Lite
+        available_keys = []
+        for k in [
+            os.environ.get("GEMINI_KEY_2"),
+            os.environ.get("GEMINI_KEY_3"),
+            os.environ.get("GEMINI_KEY_1"),
+            os.environ.get("GEMINI_API_KEY"),
+            os.environ.get("GOOGLE_API_KEY"),
+        ]:
+            if k and k.strip() and k.strip() not in available_keys:
+                available_keys.append(k.strip())
+
+        if not available_keys:
+            raise RuntimeError("No GEMINI API keys found in environment for script/scene planning.")
 
         from google import genai
-
-        client = genai.Client(api_key=gemini_key)
 
         prompt = f"""You are an expert video director. Plan an engaging, educational video script and visual plan for:
 Topic: "{topic}"
@@ -441,11 +454,31 @@ Output MUST be a JSON object with:
   "scenes": [ ... ]
 }}
 """
-        resp = client.models.generate_content(
-            model="gemini-3.1-flash-lite",
-            contents=prompt,
-            config={"response_mime_type": "application/json"},
-        )
+        candidate_models = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.6-flash"]
+        resp = None
+        last_error = None
+
+        for model in candidate_models:
+            for key in available_keys:
+                try:
+                    client = genai.Client(api_key=key)
+                    resp = client.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config={"response_mime_type": "application/json"},
+                    )
+                    if resp and resp.text:
+                        self.log(f"Scene planning succeeded using {model} with key {key[:8]}...")
+                        break
+                except Exception as ex:
+                    last_error = ex
+                    self.log(f"Scene planning failed on {model} with key {key[:8]}...: {ex}")
+                    time.sleep(1.0)
+            if resp and resp.text:
+                break
+
+        if not resp or not resp.text:
+            raise RuntimeError(f"All Gemini models/keys failed for video scene planning. Last error: {last_error}")
 
         try:
             data = json.loads(resp.text)
@@ -816,6 +849,7 @@ Output MUST be a JSON object with:
         self.log("composition started")
         inputs = {
             "operation": "compose",
+            "preset": "veryfast",
             "edit_decisions": edit_decisions,
             "audio_path": str(full_audio_path.resolve()),
             "output_path": str(self.final_mp4.resolve()),

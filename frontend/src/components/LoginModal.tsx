@@ -10,7 +10,7 @@ interface LoginModalProps {
 }
 
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose }) => {
-  const { loginWithGoogle } = useAuth();
+  const { loginWithGoogle, authError, clearAuthError } = useAuth();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Close on Escape key press
@@ -84,6 +84,25 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose }) => {
             {/* Title & Subtitle */}
             <h2 className="login-title">Welcome to Limo</h2>
             <p className="login-subtitle">Sign in to continue</p>
+
+            {/* Error Notification Card if Auth Failed */}
+            {authError && (
+              <div className="login-error-card animate-shake">
+                <div className="error-icon">⚠️</div>
+                <div className="error-text-content">
+                  <span className="error-title">Sign-in Issue</span>
+                  <p className="error-desc">{authError}</p>
+                </div>
+                <button
+                  type="button"
+                  className="error-dismiss-btn"
+                  onClick={clearAuthError}
+                  title="Dismiss"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
 
             {/* Single Google Authentication Action */}
             <div className="login-buttons-group">
@@ -288,8 +307,68 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose }) => {
           margin: 6px 0 28px 0;
         }
 
+        .login-error-card {
+          width: 100%;
+          background: rgba(239, 68, 68, 0.12);
+          border: 1px solid rgba(239, 68, 68, 0.35);
+          border-radius: 10px;
+          padding: 10px 12px;
+          margin-bottom: 16px;
+          display: flex;
+          align-items: flex-start;
+          gap: 8px;
+          text-align: left;
+        }
+
+        .error-icon {
+          font-size: 14px;
+          line-height: 1;
+          margin-top: 1px;
+        }
+
+        .error-text-content {
+          flex: 1;
+        }
+
+        .error-title {
+          font-size: 11px;
+          font-weight: 700;
+          color: #f87171;
+          display: block;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+        }
+
+        .error-desc {
+          font-size: 11px;
+          color: #fca5a5;
+          margin: 2px 0 0 0;
+          line-height: 1.4;
+          word-break: break-word;
+        }
+
+        .error-dismiss-btn {
+          background: transparent;
+          border: none;
+          color: #f87171;
+          cursor: pointer;
+          font-size: 12px;
+          padding: 2px 4px;
+          border-radius: 4px;
+          opacity: 0.8;
+          transition: opacity 0.15s ease;
+        }
+
+        .error-dismiss-btn:hover {
+          opacity: 1;
+          background: rgba(239, 68, 68, 0.2);
+        }
+
         .login-buttons-group {
           width: 100%;
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
         }
 
         .google-auth-button {

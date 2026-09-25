@@ -45,13 +45,18 @@ class LLMReasoningEngine(ReasoningEngine):
         self.provider_manager = provider_manager or llm_provider_manager
         self.temperature = temperature
 
-    def _build_system_instruction(self, context: AgentContext) -> str:
+    def _build_system_instruction(self, context: AgentContext, has_tools: bool = True) -> str:
         """Combine core identity guidelines with active domain skill instructions."""
-        guidelines = (
-            "You are Limo, an intelligent AI workspace agent for conversational ideation and deliverables. "
-            "Respond helpfully, accurately, and concisely. Use available tools when requested information is needed. "
+        tool_guideline = (
+            "Use available tools when requested information is needed. "
             "When tool observations are present in the turn scratchpad, thoroughly synthesize your final, grounded answer "
             "incorporating the retrieved facts. Do not repeatedly invoke the same tool once observations have been gathered."
+            if has_tools else
+            "Tools are not active for this turn. Always respond directly with your complete analysis and explanations in plain text."
+        )
+        guidelines = (
+            f"You are Limo, an intelligent AI workspace agent for conversational ideation and deliverables. "
+            f"Respond helpfully, accurately, and concisely. {tool_guideline}"
         )
         if context.skill_instructions:
             return f"{guidelines}\n\n## Active Skill Instructions:\n{context.skill_instructions}"
@@ -113,7 +118,7 @@ class LLMReasoningEngine(ReasoningEngine):
 
     async def decide(self, context: AgentContext, available_tools: List[BaseTool]) -> AgentAction:
         """Invoke LLMProviderManager with formatted prompt and registered tool declarations."""
-        system_instruction = self._build_system_instruction(context)
+        system_instruction = self._build_system_instruction(context, has_tools=bool(available_tools))
         selected = ContextSelector.select(context.unified_input)
         prompt = self._build_prompt(context, selected_context=selected)
         tools_declarations = self._build_tools_declarations(available_tools) if available_tools else None

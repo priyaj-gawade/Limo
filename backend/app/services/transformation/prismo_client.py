@@ -134,17 +134,18 @@ class _LLMBridgeHandler(BaseHTTPRequestHandler):
             for fc in getattr(res, "function_calls", [])
         ]
 
+        model_name = getattr(res, "model_name", None) or getattr(self.llm_manager, "primary_model", "gemini-3.5-flash-lite")
         return {
             "result": {
                 "text": res.text or "",
-                "model": "gemini-3.5-flash-lite",
+                "model": model_name,
                 "accountId": getattr(res, "route_key", "limo-route"),
                 "finishReason": "STOP",
                 "functionCalls": function_calls_payload,
             },
             "diagnostics": {
                 "provider": "limo-provider-manager",
-                "model": "gemini-3.5-flash-lite",
+                "model": model_name,
                 "accountId": getattr(res, "route_key", "limo-route"),
                 "durationMs": int(getattr(res, "latency_sec", 0.0) * 1000),
                 "fallbackOccurred": getattr(res, "retries_used", 0) > 0,
@@ -169,9 +170,10 @@ class _LLMBridgeHandler(BaseHTTPRequestHandler):
         finally:
             loop.close()
 
+        model_name = getattr(res, "model_name", None) or getattr(self.llm_manager, "primary_model", "gemini-3.5-flash-lite")
         return {
             "text": res.text or "",
-            "model": "gemini-3.5-flash-lite",
+            "model": model_name,
             "accountId": getattr(res, "route_key", "limo-route"),
         }
 

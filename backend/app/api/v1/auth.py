@@ -21,7 +21,14 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 async def login(response: Response):
     """Initiate Google OAuth flow, returning authorization URL and CSRF state."""
     state = secrets.token_urlsafe(16)
-    auth_url = auth_service.generate_auth_url(state=state)
+    try:
+        auth_url = auth_service.generate_auth_url(state=state)
+    except Exception as e:
+        logger.error("Failed to generate Google OAuth URL: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Google OAuth is not properly configured: {str(e)}",
+        )
 
     cookie_kwargs = {
         "httponly": True,
@@ -44,7 +51,14 @@ async def login(response: Response):
 async def google_login(response: Response, redirect: Optional[str] = Query(None)):
     """Initiate Google OAuth 2.0 sign-in with direct 307 redirect to Google."""
     state = secrets.token_urlsafe(16)
-    auth_url = auth_service.generate_auth_url(state=state)
+    try:
+        auth_url = auth_service.generate_auth_url(state=state)
+    except Exception as e:
+        logger.error("Failed to generate Google OAuth URL: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Google OAuth is not properly configured: {str(e)}",
+        )
 
     resp = RedirectResponse(url=auth_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
     resp.set_cookie(
