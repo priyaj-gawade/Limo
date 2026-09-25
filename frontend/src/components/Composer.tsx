@@ -62,8 +62,22 @@ export const Composer: React.FC<ComposerProps> = ({
       })
       .then((data: VoiceCatalogResponse) => {
         if (data && data.voices && data.voices.length > 0) {
-          setVoices(data.voices);
-          const def = data.voices.find((v) => v.is_configured_default) || data.voices[0];
+          // Check if running inside offline desktop Electron app
+          const isDesktopApp = typeof window !== 'undefined' && Boolean(
+            (window as any).electron ||
+            (window as any).electronAPI ||
+            navigator.userAgent.includes('Electron') ||
+            (window as any).__LIMO_DESKTOP__
+          );
+
+          // On deployed web version, only active and working edge_tts voices are shown.
+          // Azure, OpenAI, and Piper remain available in the offline/desktop environment.
+          const availableVoices = isDesktopApp
+            ? data.voices
+            : data.voices.filter((v) => v.provider === 'edge_tts');
+
+          setVoices(availableVoices);
+          const def = availableVoices.find((v) => v.is_configured_default) || availableVoices[0];
           setSelectedVoice(def);
         }
       })
@@ -410,59 +424,69 @@ export const Composer: React.FC<ComposerProps> = ({
                     <div className="voice-dropdown-menu animate-fade-in">
                       <div className="voice-dropdown-header">Voice & Narration</div>
 
-                      {/* Primary Voices */}
-                      <div className="voice-section-title">Primary Engines</div>
-                      {voices.filter(v => v.provider !== 'edge_tts').map((v) => {
-                        const isSel = selectedVoice?.voice_id === v.voice_id && selectedVoice?.provider === v.provider;
-                        return (
-                          <div
-                            key={`${v.provider}-${v.voice_id}`}
-                            className={`voice-option ${isSel ? 'selected' : ''}`}
-                            onClick={() => {
-                              setSelectedVoice(v);
-                              setVoiceMenuOpen(false);
-                            }}
-                          >
-                            <div className="voice-opt-left">
-                              <span className="voice-opt-name">{v.display_name}</span>
-                              <span className="voice-opt-lang">{v.language}</span>
-                            </div>
-                            <div className="voice-opt-right">
-                              <span className={`voice-opt-badge ${v.provider}`}>
-                                {v.provider}
-                              </span>
-                              {isSel && <Check size={13} className="voice-opt-check" />}
-                            </div>
-                          </div>
-                        );
-                      })}
+                      {/* Primary Voices (Offline/Desktop or configured external APIs) */}
+                      {voices.some(v => v.provider !== 'edge_tts') && (
+                        <>
+                          <div className="voice-section-title">Primary Engines</div>
+                          {voices.filter(v => v.provider !== 'edge_tts').map((v) => {
+                            const isSel = selectedVoice?.voice_id === v.voice_id && selectedVoice?.provider === v.provider;
+                            return (
+                              <div
+                                key={`${v.provider}-${v.voice_id}`}
+                                className={`voice-option ${isSel ? 'selected' : ''}`}
+                                onClick={() => {
+                                  setSelectedVoice(v);
+                                  setVoiceMenuOpen(false);
+                                }}
+                              >
+                                <div className="voice-opt-left">
+                                  <span className="voice-opt-name">{v.display_name}</span>
+                                  <span className="voice-opt-lang">{v.language}</span>
+                                </div>
+                                <div className="voice-opt-right">
+                                  <span className={`voice-opt-badge ${v.provider}`}>
+                                    {v.provider}
+                                  </span>
+                                  {isSel && <Check size={13} className="voice-opt-check" />}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
 
-                      {/* Fallback Voices */}
-                      <div className="voice-section-title">Fallback Engines</div>
-                      {voices.filter(v => v.provider === 'edge_tts').map((v) => {
-                        const isSel = selectedVoice?.voice_id === v.voice_id && selectedVoice?.provider === v.provider;
-                        return (
-                          <div
-                            key={`${v.provider}-${v.voice_id}`}
-                            className={`voice-option ${isSel ? 'selected' : ''}`}
-                            onClick={() => {
-                              setSelectedVoice(v);
-                              setVoiceMenuOpen(false);
-                            }}
-                          >
-                            <div className="voice-opt-left">
-                              <span className="voice-opt-name">{v.display_name}</span>
-                              <span className="voice-opt-lang">{v.language}</span>
-                            </div>
-                            <div className="voice-opt-right">
-                              <span className="voice-opt-badge edge_tts">
-                                Edge
-                              </span>
-                              {isSel && <Check size={13} className="voice-opt-check" />}
-                            </div>
-                          </div>
-                        );
-                      })}
+                      {/* Edge TTS Voices */}
+                      {voices.some(v => v.provider === 'edge_tts') && (
+                        <>
+                          {voices.some(v => v.provider !== 'edge_tts') && (
+                            <div className="voice-section-title">Fallback Engines</div>
+                          )}
+                          {voices.filter(v => v.provider === 'edge_tts').map((v) => {
+                            const isSel = selectedVoice?.voice_id === v.voice_id && selectedVoice?.provider === v.provider;
+                            return (
+                              <div
+                                key={`${v.provider}-${v.voice_id}`}
+                                className={`voice-option ${isSel ? 'selected' : ''}`}
+                                onClick={() => {
+                                  setSelectedVoice(v);
+                                  setVoiceMenuOpen(false);
+                                }}
+                              >
+                                <div className="voice-opt-left">
+                                  <span className="voice-opt-name">{v.display_name}</span>
+                                  <span className="voice-opt-lang">{v.language}</span>
+                                </div>
+                                <div className="voice-opt-right">
+                                  <span className="voice-opt-badge edge_tts">
+                                    Edge
+                                  </span>
+                                  {isSel && <Check size={13} className="voice-opt-check" />}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
