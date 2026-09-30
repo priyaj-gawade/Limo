@@ -14,7 +14,8 @@ Transform text, reports, documents, spreadsheets, images, audio, video, and web 
 
 <div align="center">
 
-<video src="docs/media/limo-github.mp4" controls="controls" width="100%" poster="docs/media/demo-poster.png"></video>
+
+<video src=["docs/media/limo-github.mp4"](https://github.com/user-attachments/assets/48a922e4-76e3-4a26-8a59-f47e50df9ab4) controls="controls" width="100%" poster="docs/media/demo-poster.png"></video>
 
 <sub>If the video does not play directly in your browser, you can <a href="docs/media/limo-github.mp4">download or watch the demo video directly</a>.</sub>
 
