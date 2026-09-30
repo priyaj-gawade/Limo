@@ -92,3 +92,4 @@ export {
   type AutoSaveDefault,
   type AutoSaveDefaultApi,
 } from './auto-save-pref'
+export { LimoMascot, type LimoMascotProps, type MascotEmotion } from './LimoMascot'

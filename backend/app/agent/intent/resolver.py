@@ -128,13 +128,25 @@ class IntentResolver:
 
         # Pattern B: Explicit deliverable creation command followed by content
         # e.g. "Create a Markdown document summarizing this article: [Article...]"
+        # or "Create an audio narration of this: [Article...]"
+        # or "Create a video explaining this: [Topic...]"
         m_create = re.match(
-            r"^((?:create|generate|make|draft|produce|build|write|export|convert|transform|turn)\s+(?:a\s+|an\s+)?(?:markdown\s+|md\s+|docx?\s+|slides?\s+|presentation\s+|spreadsheet\s+|sheets?\s+|xlsx\s+|pdf\s+)?(?:document|doc|report|presentation|slides|deck|spreadsheet|sheet|table|pdf|memo|file)[^:\n]{0,100})(?::|\n+)(.*)$",
+            r"^((?:create|generate|make|draft|produce|build|write|export|convert|transform|turn)\s+(?:a\s+|an\s+)?(?:one-page\s+|2-slide\s+|small\s+|short\s+|\d+:\d+\s+|\d+\s*(?:-|secs?|seconds?)\s+)?(?:markdown\s+|md\s+|docx?\s+|slides?\s+|presentation\s+|spreadsheet\s+|sheets?\s+|xlsx\s+|pdf\s+|infographics?|posters?|images?|videos?|audio|speech|narration|voiceover|voice|podcast\s+)?(?:document|doc|report|presentation|slides|deck|spreadsheet|sheet|table|pdf|memo|file|video|clip|reel|audio|speech|narration|voiceover|podcast|infographic|poster|image)[^:\n]{0,100})(?::|\n+)(.*)$",
             raw,
             flags=re.IGNORECASE | re.DOTALL,
         )
-        if m_create:
+        if m_create and m_create.group(2).strip():
             return m_create.group(1).strip(), m_create.group(2).strip()
+
+        # Pattern B2: Speech / narration reading directives followed by content
+        # e.g. "Read this aloud: [Text...]" or "Synthesize speech: [Text...]"
+        m_speech = re.match(
+            r"^((?:please\s+)?(?:read\s+(?:this\s+)?aloud|read\s+aloud|read\s+out\s+loud|synthesize\s+(?:speech|voice|audio)|narrate(?:\s+this)?|voice(?:\s+this)?|speak(?:\s+this)?)[^:\n]{0,80})(?::|\n+)(.*)$",
+            raw,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if m_speech and m_speech.group(2).strip():
+            return m_speech.group(1).strip(), m_speech.group(2).strip()
 
         # Pattern C: Multi-paragraph with trailing command
         paragraphs = [p.strip() for p in raw.split("\n\n") if p.strip()]
@@ -424,9 +436,10 @@ class IntentResolver:
 
         has_deliverable_command = bool(
             re.search(
-                r"\b(?:create|make|generate|produce|build|draft|write|export|convert|transform|turn)\s+(?:a\s+|an\s+)?(?:one-page\s+|2-slide\s+|small\s+|short\s+|8-second\s+|15-second\s+|\d+:\d+\s+)?(?:markdown\s+|md\s+|docx?\s+|slides?\s+|presentation\s+|spreadsheet\s+|sheets?\s+|xlsx\s+|pdf\s+|infographics?|posters?|images?|videos?)\b",
+                r"\b(?:create|make|generate|produce|build|draft|write|export|convert|transform|turn)\s+(?:a\s+|an\s+)?(?:one-page\s+|2-slide\s+|small\s+|short\s+|8-second\s+|15-second\s+|\d+:\d+\s+)?(?:markdown\s+|md\s+|docx?\s+|slides?\s+|presentation\s+|spreadsheet\s+|sheets?\s+|xlsx\s+|pdf\s+|infographics?|posters?|images?|videos?|audio|speech|narration|voiceover)\b",
                 d_lower,
             )
+            or re.search(r"\b(?:read\s+(?:this\s+)?aloud|read\s+aloud|synthesize\s+(?:speech|voice|audio)|narrate\s+this)\b", d_lower)
         ) or mode_str in ("docs", "slides", "sheets", "video", "audio", "infographic", "poster", "image")
 
         # Pure Conversational Web Reach Turns (No Deliverable Command)
@@ -582,7 +595,8 @@ class IntentResolver:
         # Rule 6: Explicit Conversion / Export Requests (TRANSFORM_TO_ARTIFACT)
         # Evaluated before pure conversational summary so "Export this summary as Markdown" is honored!
         # -------------------------------------------------------------------
-        m_conv = re.search(r"\b(?:convert|transform|turn|export|put)\s+(.+?)\s+(?:in|as|to|into)\s+([a-z0-9_\s]+)", d_lower)
+        is_descriptive_statement = bool(re.search(r"\b(?:i|we|they|he|she|it)\s+(?:turn|convert|transform|put)\b", d_lower))
+        m_conv = None if is_descriptive_statement else re.search(r"\b(?:convert|transform|turn|export|put)\s+(.+?)\s+(?:in|as|to|into)\s+([a-z0-9_\s]+)", d_lower)
         if m_conv:
             src_phrase = m_conv.group(1).strip()
             target_str = m_conv.group(2).strip()
@@ -632,7 +646,7 @@ class IntentResolver:
                     reason="Explicit conversion to Document deliverable",
                     source_reference=src_phrase,
                 )
-            elif any(w in target_str for w in ["video", "mp4"]):
+            elif any(w in target_str for w in ["video", "mp4"]) and mode_str != "audio":
                 return ResolutionResult(
                     response_type=ResponseType.TRANSFORM_TO_ARTIFACT,
                     user_goal=UserGoal.CONVERT_DELIVERABLE,
@@ -641,7 +655,7 @@ class IntentResolver:
                     reason="Explicit conversion to Video deliverable",
                     source_reference=src_phrase,
                 )
-            elif any(w in target_str for w in ["audio", "speech", "narration", "mp3", "voice"]):
+            elif any(w in target_str for w in ["audio", "speech", "narration", "mp3", "voice"]) and mode_str != "video":
                 return ResolutionResult(
                     response_type=ResponseType.TRANSFORM_TO_ARTIFACT,
                     user_goal=UserGoal.CONVERT_DELIVERABLE,
@@ -698,6 +712,7 @@ class IntentResolver:
         # Rule 8: Mode Override Evaluation
         # Active UI mode explicitly sets the deliverable format container.
         # Format explicitly requested in text (e.g. Markdown, PDF, Slides) overrides mode.
+        # Strict isolation: Audio mode NEVER produces Video, Video mode NEVER produces Audio.
         # -------------------------------------------------------------------
         if mode_str in ("docs", "slides", "sheets", "video", "audio", "infographic", "poster", "image"):
             mode_to_fmt = {
@@ -712,25 +727,55 @@ class IntentResolver:
             }
             override_fmt = mode_to_fmt[mode_str]
 
-            # If user explicitly requested another format in text, text format takes precedence
-            if re.search(r"\b(markdown|\.md)\b", d_lower):
-                target_f = TargetFormat.MARKDOWN
-            elif re.search(r"\b(videos?|explainer\s+video)\b", d_lower):
-                target_f = TargetFormat.VIDEO
-            elif re.search(r"\b(pdfs?|executive\s+memo\s+pdf)\b", d_lower):
-                target_f = TargetFormat.PDF
-            elif re.search(r"\b(presentations?|slides?|deck|pptx|powerpoint)\b", d_lower):
-                target_f = TargetFormat.PRESENTATION
-            elif re.search(r"\b(spreadsheets?|sheets?|xlsx|excel|csv)\b", d_lower):
-                target_f = TargetFormat.SPREADSHEET
-            elif re.search(r"\b(documents?|docs?|docx)\b", d_lower):
-                target_f = TargetFormat.DOCUMENT
-            elif re.search(r"\b(audio|speech|narration|voiceover|read\s+(?:this\s+)?aloud)\b", d_lower):
-                target_f = TargetFormat.AUDIO
-            elif re.search(r"\b(infographics?|posters?|images?|visual\s+posters?)\b", d_lower):
-                target_f = TargetFormat.INFOGRAPHIC
+            target_f = override_fmt
+            if mode_str == "audio":
+                # Audio mode isolation: NEVER allow video generation under any circumstances
+                if re.search(r"\b(?:create|generate|make|export)\s+(?:a\s+|an\s+)?(?:markdown\s+document|md\s+file)\b", d_lower):
+                    target_f = TargetFormat.MARKDOWN
+                elif re.search(r"\b(?:create|generate|make|export)\s+(?:a\s+|an\s+)?(?:pdf(?:\s+report|\s+memo)?)\b", d_lower):
+                    target_f = TargetFormat.PDF
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:presentations?|slide\s+deck|slides?)\b", d_lower):
+                    target_f = TargetFormat.PRESENTATION
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:spreadsheets?|sheets?|xlsx|excel\s+sheet)\b", d_lower):
+                    target_f = TargetFormat.SPREADSHEET
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:documents?|docx?)\b", d_lower):
+                    target_f = TargetFormat.DOCUMENT
+                else:
+                    target_f = TargetFormat.AUDIO
+            elif mode_str == "video":
+                # Video mode isolation: NEVER allow audio generation under any circumstances
+                if re.search(r"\b(?:create|generate|make|export)\s+(?:a\s+|an\s+)?(?:markdown\s+document|md\s+file)\b", d_lower):
+                    target_f = TargetFormat.MARKDOWN
+                elif re.search(r"\b(?:create|generate|make|export)\s+(?:a\s+|an\s+)?(?:pdf(?:\s+report|\s+memo)?)\b", d_lower):
+                    target_f = TargetFormat.PDF
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:presentations?|slide\s+deck|slides?)\b", d_lower):
+                    target_f = TargetFormat.PRESENTATION
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:spreadsheets?|sheets?|xlsx|excel\s+sheet)\b", d_lower):
+                    target_f = TargetFormat.SPREADSHEET
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:documents?|docx?)\b", d_lower):
+                    target_f = TargetFormat.DOCUMENT
+                else:
+                    target_f = TargetFormat.VIDEO
             else:
-                target_f = override_fmt
+                # Other modes: require explicit creation verb so content words don't hijack
+                if re.search(r"\b(?:create|generate|make|export)\s+(?:a\s+|an\s+)?(?:markdown\s+document|md\s+file)\b", d_lower):
+                    target_f = TargetFormat.MARKDOWN
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:explainer\s+|short\s+)?videos?\b", d_lower):
+                    target_f = TargetFormat.VIDEO
+                elif re.search(r"\b(?:create|generate|make|export)\s+(?:a\s+|an\s+)?(?:pdf(?:\s+report|\s+memo)?)\b", d_lower):
+                    target_f = TargetFormat.PDF
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:presentations?|slide\s+deck|slides?)\b", d_lower):
+                    target_f = TargetFormat.PRESENTATION
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:spreadsheets?|sheets?|xlsx|excel\s+sheet)\b", d_lower):
+                    target_f = TargetFormat.SPREADSHEET
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:documents?|docx?)\b", d_lower):
+                    target_f = TargetFormat.DOCUMENT
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:audio|speech|narration|podcast)\b|\b(?:read\s+(?:this\s+)?aloud|synthesize\s+speech)\b", d_lower):
+                    target_f = TargetFormat.AUDIO
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:infographics?|posters?)\b", d_lower):
+                    target_f = TargetFormat.INFOGRAPHIC
+                else:
+                    target_f = override_fmt
 
             if target_f == TargetFormat.INFOGRAPHIC and explicit_ratio_requested and explicit_ratio_requested not in ("3:4", "9:16", "16:9", "1:1", "4:3"):
                 raise BadRequestError(
@@ -836,24 +881,40 @@ class IntentResolver:
         # Rule 10: Explicit Deliverable Generation Requests (GENERATE_ARTIFACT)
         # -------------------------------------------------------------------
         has_table = bool(re.search(r"\b(tables?)\b", d_unquoted))
-        
+
+        is_leading_audio_command = bool(re.match(
+            r"^(?:please\s+)?(?:read\s+(?:this\s+)?aloud|read\s+aloud|read\s+out\s+loud|synthesize\s+(?:speech|voice|audio)|narrate(?:\s+this)?|create\s+(?:an?\s+)?audio|generate\s+(?:an?\s+)?audio|voice(?:\s+this)?)\b",
+            d_unquoted,
+            flags=re.IGNORECASE,
+        ))
+        is_leading_video_command = bool(re.match(
+            r"^(?:please\s+)?(?:create|generate|make|produce|render|record)\s+(?:a\s+|an\s+)?(?:explainer\s+|short\s+)?video\b",
+            d_unquoted,
+            flags=re.IGNORECASE,
+        ))
+
         detected_formats: List[TargetFormat] = []
-        if has_explicit_md_file or ("table in markdown" in d_unquoted or "document in markdown" in d_unquoted or "markdown document" in d_unquoted):
-            detected_formats.append(TargetFormat.MARKDOWN)
-        if has_explicit_slides:
-            detected_formats.append(TargetFormat.PRESENTATION)
-        if has_explicit_pdf:
-            detected_formats.append(TargetFormat.PDF)
-        if has_explicit_doc or ("table in a document" in d_unquoted or "table in a doc" in d_unquoted or "table in doc" in d_unquoted):
-            detected_formats.append(TargetFormat.DOCUMENT)
-        if has_explicit_sheet or ("spreadsheet table" in d_unquoted or "table of sales" in d_unquoted):
-            detected_formats.append(TargetFormat.SPREADSHEET)
-        if has_explicit_video:
-            detected_formats.append(TargetFormat.VIDEO)
-        if has_explicit_audio or re.search(r"\b(read\s+(?:this\s+)?aloud|synthesize\s+(?:speech|voice|audio))\b", d_unquoted):
+        if is_leading_audio_command:
             detected_formats.append(TargetFormat.AUDIO)
-        if has_explicit_infographic or has_explicit_image or ("infographic about" in d_unquoted or "poster for" in d_unquoted or "poster about" in d_unquoted):
-            detected_formats.append(TargetFormat.INFOGRAPHIC)
+        elif is_leading_video_command:
+            detected_formats.append(TargetFormat.VIDEO)
+        else:
+            if has_explicit_md_file or ("table in markdown" in d_unquoted or "document in markdown" in d_unquoted or "markdown document" in d_unquoted):
+                detected_formats.append(TargetFormat.MARKDOWN)
+            if has_explicit_slides:
+                detected_formats.append(TargetFormat.PRESENTATION)
+            if has_explicit_pdf:
+                detected_formats.append(TargetFormat.PDF)
+            if has_explicit_doc or ("table in a document" in d_unquoted or "table in a doc" in d_unquoted or "table in doc" in d_unquoted):
+                detected_formats.append(TargetFormat.DOCUMENT)
+            if has_explicit_sheet or ("spreadsheet table" in d_unquoted or "table of sales" in d_unquoted):
+                detected_formats.append(TargetFormat.SPREADSHEET)
+            if has_explicit_video:
+                detected_formats.append(TargetFormat.VIDEO)
+            if has_explicit_audio or re.search(r"\b(read\s+(?:this\s+)?aloud|synthesize\s+(?:speech|voice|audio))\b", d_unquoted):
+                detected_formats.append(TargetFormat.AUDIO)
+            if has_explicit_infographic or has_explicit_image or ("infographic about" in d_unquoted or "poster for" in d_unquoted or "poster about" in d_unquoted):
+                detected_formats.append(TargetFormat.INFOGRAPHIC)
 
 
         # Ambiguous disjunctive formats: "document or slides", "maybe a spreadsheet or a doc"

@@ -43,6 +43,9 @@ class Artifact(LimoBaseModel):
         default=ValidationStatus.PENDING,
         description="Current verification and factuality status"
     )
+    mime_type: Optional[str] = Field(default=None, description="Standard MIME content type (e.g. 'application/pdf')")
+    engine: Optional[str] = Field(default=None, description="Generating engine identifier (e.g. 'genoffice', 'social')")
+    skill: Optional[str] = Field(default=None, description="Generating skill identifier (e.g. 'linkedin', 'twitter', 'instagram')")
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="UTC generation timestamp"
@@ -69,6 +72,8 @@ class Artifact(LimoBaseModel):
         if len(v) != 64 or not all(c in "0123456789abcdefABCDEF" for c in v):
             raise ValueError("Content hash must be a valid 64-character hexadecimal SHA-256 digest")
         return v.lower()
+
+    sha256 = property(lambda self: self.content_hash)
 
 
 class ArtifactVersion(LimoBaseModel):
@@ -106,3 +111,5 @@ class ArtifactVersion(LimoBaseModel):
         if len(v) != 64 or not all(c in "0123456789abcdefABCDEF" for c in v):
             raise ValueError("Content hash must be a valid 64-character hexadecimal SHA-256 digest")
         return v.lower()
+
+    sha256 = property(lambda self: self.content_hash)

@@ -22,6 +22,14 @@ class ArtifactRepository:
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
+        meta = dict(artifact.metadata or {})
+        if artifact.mime_type and "mime_type" not in meta:
+            meta["mime_type"] = artifact.mime_type
+        if artifact.engine and "engine" not in meta:
+            meta["engine"] = artifact.engine
+        if artifact.skill and "skill" not in meta:
+            meta["skill"] = artifact.skill
+
         conn.execute(sql, (
             artifact.id,
             artifact.project_id,
@@ -37,12 +45,13 @@ class ArtifactRepository:
             artifact.version,
             artifact.validation_status.value,
             artifact.created_at.isoformat(),
-            json.dumps(artifact.metadata),
+            json.dumps(meta),
         ))
         return artifact
 
     @staticmethod
     def _row_to_model(row: Any) -> Artifact:
+        meta = parse_json(row["metadata_json"], default={})
         return Artifact(
             id=row["id"],
             project_id=row["project_id"],
@@ -58,8 +67,20 @@ class ArtifactRepository:
             version=row["version"],
             validation_status=ValidationStatus(row["validation_status"]),
             created_at=parse_dt(row["created_at"]),
-            metadata=parse_json(row["metadata_json"], default={}),
+            metadata=meta,
+            mime_type=meta.get("mime_type"),
+            engine=meta.get("engine"),
+            skill=meta.get("skill"),
         )
+
+    @staticmethod
+    def delete_artifact(conn: Any, artifact_id: str) -> bool:
+        """Cascade-delete validation results, provenance, versions, and artifact entity."""
+        conn.execute("DELETE FROM validation_results WHERE artifact_id = ?", (artifact_id,))
+        conn.execute("DELETE FROM provenance WHERE artifact_id = ?", (artifact_id,))
+        conn.execute("DELETE FROM artifact_versions WHERE artifact_id = ?", (artifact_id,))
+        cur = conn.execute("DELETE FROM artifacts WHERE id = ?", (artifact_id,))
+        return cur.rowcount > 0
 
     @staticmethod
     def get_artifact(conn: Any, artifact_id: str) -> Optional[Artifact]:

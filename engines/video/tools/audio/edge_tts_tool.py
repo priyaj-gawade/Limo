@@ -148,6 +148,8 @@ class EdgeTTSTool(BaseTool):
             or inputs.get("voice_id")
             or "en-US-AndrewMultilingualNeural"
         )
+        if voice in ("Aoede", "Puck", "Charon", "Fenrir", "Kore") or not voice:
+            voice = "en-US-AndrewMultilingualNeural"
 
         # Convert speaking_rate float if rate string not explicitly provided
         rate_raw = inputs.get("rate")
@@ -187,14 +189,29 @@ class EdgeTTSTool(BaseTool):
         start_time = time.time()
         try:
             async def _generate() -> None:
-                communicate = edge_tts.Communicate(
-                    text=text,
-                    voice=voice,
-                    rate=rate_str,
-                    pitch=pitch_str,
-                    volume=volume_str,
-                )
-                await communicate.save(str(output_path))
+                nonlocal voice
+                try:
+                    communicate = edge_tts.Communicate(
+                        text=text,
+                        voice=voice,
+                        rate=rate_str,
+                        pitch=pitch_str,
+                        volume=volume_str,
+                    )
+                    await communicate.save(str(output_path))
+                except Exception:
+                    if voice != "en-US-AndrewMultilingualNeural":
+                        voice = "en-US-AndrewMultilingualNeural"
+                        communicate = edge_tts.Communicate(
+                            text=text,
+                            voice=voice,
+                            rate=rate_str,
+                            pitch=pitch_str,
+                            volume=volume_str,
+                        )
+                        await communicate.save(str(output_path))
+                    else:
+                        raise
 
             asyncio.run(_generate())
 

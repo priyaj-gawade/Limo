@@ -105,6 +105,9 @@ class RegisterArtifactRequest(BaseModel):
     description: Optional[str] = Field(default=None, description="Brief summary of deliverable contents")
     stats: Optional[str] = Field(default=None, description="Display stats (e.g. '10 Slides • 16:9 • PPTX')")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Arbitrary generator/format metadata")
+    engine: Optional[str] = Field(default=None, description="Transformation engine used (e.g. 'genoffice', 'social')")
+    skill: Optional[str] = Field(default=None, description="Associated skill identifier (e.g. 'linkedin', 'twitter', 'instagram')")
+    mime_type: Optional[str] = Field(default=None, description="Explicit MIME content type")
 
 
 class CreateVersionRequest(BaseModel):
@@ -159,6 +162,9 @@ async def register_artifact(
         description=req.description,
         stats=req.stats,
         metadata=metadata,
+        engine=req.engine,
+        skill=req.skill,
+        mime_type=req.mime_type,
     )
 
 
@@ -198,10 +204,35 @@ async def get_artifact(
     artifact_id: str,
     current_user: User = Depends(get_current_user),
 ) -> Artifact:
-    """Retrieve metadata, version, and status for a deliverable artifact."""
-    artifact = artifact_service.get_artifact(artifact_id)
+    """Retrieve metadata, version, and status for a deliverable artifact.
+    Automatically checks and synchronizes modifications made by external/GenOffice editors.
+    """
+    artifact = artifact_service.sync_artifact_file(artifact_id)
     _authorize_artifact(artifact, current_user)
     return artifact
+
+
+@router.delete("/{artifact_id}", status_code=status.HTTP_200_OK)
+async def delete_artifact(
+    artifact_id: str,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Delete an artifact, its historical versions, and sandboxed storage file."""
+    artifact = artifact_service.get_artifact(artifact_id)
+    _authorize_artifact(artifact, current_user)
+    deleted = artifact_service.delete_artifact(artifact_id)
+    return {"status": "deleted", "artifact_id": artifact_id, "deleted": deleted}
+
+
+@router.post("/{artifact_id}/sync", response_model=Artifact)
+async def sync_artifact(
+    artifact_id: str,
+    current_user: User = Depends(get_current_user),
+) -> Artifact:
+    """Explicitly synchronize artifact metadata and revision when file was edited and saved."""
+    artifact = artifact_service.get_artifact(artifact_id)
+    _authorize_artifact(artifact, current_user)
+    return artifact_service.sync_artifact_file(artifact_id)
 
 
 @router.get("/{artifact_id}/download")

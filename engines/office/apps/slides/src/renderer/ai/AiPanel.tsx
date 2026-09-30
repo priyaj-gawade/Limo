@@ -38,8 +38,7 @@ import {
   settingsSupportVision,
 } from './slide-qc'
 import { useI18n, t as tGlobal, aiLangDirective, type TFunc } from '../i18n/locale'
-import { AiScopeQuote, Markdown, type AiScopeQuoteData } from '@genoffice/ui'
-import { GensparkMark } from '../components/icons'
+import { AiScopeQuote, Markdown, LimoMascot, type AiScopeQuoteData } from '@genoffice/ui'
 import sendEnterOn from '../assets/send-enter-on.png'
 import sendEnterOff from '../assets/send-enter-off.png'
 import sendStop from '../assets/send-stop.png'
@@ -2165,7 +2164,7 @@ export function AiPanel({
         aria-label={t('appAiRailExpand')}
         onClick={onExpand}
       >
-        <GensparkMark size={22} />
+        <LimoMascot size={22} interactive={true} />
       </button>
     )
   }
@@ -2193,11 +2192,11 @@ export function AiPanel({
         onPointerDown={startResize}
         role="separator"
         aria-orientation="vertical"
-        aria-label="Genspark AI"
+        aria-label="Limo AI"
       />
       <div className="ai-panel-header">
         <span className="ai-panel-title">
-          <GensparkMark size={22} />
+          <LimoMascot size={22} interactive={true} isGenerating={busy} />
           {t('aiPanelTitle')}
         </span>
         <div className="ai-panel-header-actions">

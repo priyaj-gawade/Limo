@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  LimoMascot,
   RibbonCollapseButton,
   RibbonExpandButton,
   useDismissablePopover,
@@ -7,7 +8,6 @@ import {
 } from '@genoffice/ui'
 import { useI18n } from '../i18n/locale'
 import type { StringKey } from '../i18n/locale'
-import { GensparkMark } from '../ai/AiPanel'
 import {
   IconChevronDown,
   IconCode,
@@ -190,9 +190,9 @@ export function Ribbon(p: Props) {
               onClick={p.onToggleAi}
             >
               <span className="rb-big-icon">
-                <GensparkMark size={26} />
+                <LimoMascot size={26} interactive={true} />
               </span>
-              <span>Genspark AI</span>
+              <span>Limo AI</span>
             </button>
             <button
               type="button"

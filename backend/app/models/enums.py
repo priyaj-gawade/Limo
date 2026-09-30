@@ -26,6 +26,7 @@ class OutputFormat(StrEnum):
     VIDEO = "video"
     LINKEDIN = "linkedin"
     TWITTER = "twitter"
+    INSTAGRAM = "instagram"
     ADVISORY = "advisory"
     INFOGRAPHIC = "infographic"
     SUMMARY = "summary"

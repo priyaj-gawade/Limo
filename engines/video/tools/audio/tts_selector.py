@@ -211,6 +211,18 @@ class TTSSelector(BaseTool):
             return ToolResult(success=False, error="No TTS provider available.")
 
         result = tool.execute(self._adapt_inputs(tool, inputs))
+        if not result.success and getattr(tool, "fallback_tools", None):
+            tool_by_name = {t.name: t for t in candidates}
+            for fb_name in tool.fallback_tools:
+                fb_tool = tool_by_name.get(fb_name)
+                if fb_tool and fb_tool.get_status() == ToolStatus.AVAILABLE:
+                    fb_res = fb_tool.execute(self._adapt_inputs(fb_tool, inputs))
+                    if fb_res.success:
+                        fb_res.data.setdefault("selected_tool", fb_tool.name)
+                        fb_res.data["selected_provider"] = fb_tool.provider
+                        fb_res.data["selection_reason"] = f"Fallback from {tool.name} to {fb_tool.name}"
+                        return fb_res
+
         if result.success:
             result.data.setdefault("selected_tool", tool.name)
             result.data["selected_provider"] = tool.provider

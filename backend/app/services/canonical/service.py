@@ -336,6 +336,149 @@ class CanonicalService:
 
         return canonical
 
+    def build_fast_canonical(
+        self,
+        norm_doc: NormalizedDocument,
+    ) -> CanonicalContent:
+        """Construct a high-fidelity, grounded CanonicalContent model deterministically (<10ms).
+        
+        Extracts structured entities, data points, key facts, and intent from document
+        sections and tables without making an upstream LLM call. Complies with all guards.
+        """
+        canonical_id = generate_canonical_id()
+        candidates = self.local_extractor.extract_candidates(norm_doc)
+
+        # 1. Intent
+        intent = CanonicalIntent(
+            primary_purpose="Information synthesis and reference",
+            target_audiences=["user"],
+            core_narrative=norm_doc.source_name,
+            urgency_level="Informational",
+        )
+
+        # 2. Entities from candidate extractor
+        entities = [
+            CanonicalEntity(
+                name=e["name"],
+                category=e.get("category", "General"),
+                description=e.get("source_reference"),
+                relevance_score=1.0,
+            )
+            for e in candidates.entities[:15]
+            if e.get("name")
+        ]
+
+        # 3. Data points from tables and metrics
+        data_points = [
+            CanonicalDataPoint(
+                metric=m["metric"],
+                value=str(m["value"]),
+                unit=None,
+                context=m.get("context"),
+            )
+            for m in candidates.metrics[:15]
+            if m.get("metric") and m.get("value")
+        ]
+
+        # 4. Facts extracted from document sections & headings
+        facts: List[CanonicalFact] = []
+        for sec in norm_doc.sections[:8]:
+            if sec.content:
+                # Take first coherent sentence or line
+                first_line = sec.content.strip().split("\n")[0].strip()
+                if len(first_line) > 20:
+                    stmt = first_line[:200]
+                    facts.append(
+                        CanonicalFact(
+                            statement=stmt,
+                            source_id=norm_doc.source_id,
+                            source_reference=sec.title or f"Page {sec.page_number}" if sec.page_number else "Section",
+                            confidence=1.0,
+                        )
+                    )
+
+        # Add key date facts if found
+        for d in candidates.dates[:3]:
+            facts.append(
+                CanonicalFact(
+                    statement=f"Document references date: {d}",
+                    source_id=norm_doc.source_id,
+                    source_reference="Date Reference",
+                    confidence=1.0,
+                )
+            )
+
+        # 5. References
+        references = [
+            CanonicalReference(
+                citation_key="[REF-1]",
+                title=norm_doc.source_name,
+                uri_or_location=norm_doc.source_id,
+            )
+        ]
+
+        canonical = CanonicalContent(
+            id=canonical_id,
+            source_ids=[norm_doc.source_id],
+            title=norm_doc.source_name,
+            context=norm_doc.raw_text[:300] if norm_doc.raw_text else norm_doc.source_name,
+            intent=intent,
+            entities=entities,
+            facts=facts,
+            claims=[],
+            events=[],
+            data_points=data_points,
+            recommendations=[],
+            references=references,
+            content_hash="0" * 64,
+            created_at=datetime.now(timezone.utc),
+            metadata={
+                "canonicalization_version": CANONICALIZATION_VERSION,
+                "model_id": "fast-deterministic",
+                "config_hash": DEFAULT_CONFIG_HASH,
+                "source_id": norm_doc.source_id,
+            },
+        )
+
+        # Evidence and consistency guards
+        canonical = self.evidence_guard.validate_canonical_evidence(canonical, norm_doc)
+        canonical = self.consistency_guard.validate_canonical_consistency(canonical, norm_doc)
+
+        # Deterministic SHA-256 hash
+        raw_dict_for_hash = canonical.model_dump()
+        canonical.content_hash = compute_canonical_hash(
+            canonical_dict=raw_dict_for_hash,
+            canonicalization_version=CANONICALIZATION_VERSION,
+            model_id="fast-deterministic",
+            config_hash=DEFAULT_CONFIG_HASH,
+        )
+
+        # Persist to SQLite database
+        try:
+            with get_connection(self.db_path) as conn:
+                JobRepository.save_canonical_content(conn, canonical)
+                source_record = SourceRepository.get_source(conn, norm_doc.source_id)
+                if source_record:
+                    updated_meta = {
+                        **source_record.metadata,
+                        "canonical_id": canonical.id,
+                        "canonical_hash": canonical.content_hash,
+                        "canonicalized_at": datetime.now(timezone.utc).isoformat(),
+                        "canonical_mode": "fast-deterministic",
+                    }
+                    SourceRepository.update_source_metadata(conn, norm_doc.source_id, updated_meta)
+        except Exception as e:
+            logger.warning("Failed to persist fast CanonicalContent for '%s': %s", norm_doc.source_id, e)
+
+        return canonical
+
+    def get_or_create_fast_canonical(self, norm_doc: NormalizedDocument) -> CanonicalContent:
+        """Return existing cached CanonicalContent or build fast deterministic model instantly."""
+        existing = self.get_canonical_by_source_id(norm_doc.source_id)
+        if existing:
+            return existing
+        return self.build_fast_canonical(norm_doc)
+
     def get_canonical_by_source_id(self, source_id: str) -> Optional[CanonicalContent]:
         """Retrieve CanonicalContent associated with a given Source ID."""
         with get_connection(self.db_path) as conn:

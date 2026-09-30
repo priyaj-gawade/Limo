@@ -65,13 +65,25 @@ async def upload_source_file(
     filename = file.filename or "uploaded_file"
     mime_type = file.content_type or "application/octet-stream"
 
-    return source_service.register_file_source(
+    source = source_service.register_file_source(
         filename=filename,
         content=content,
         mime_type=mime_type,
         project_id=project_id,
         metadata={"user_id": current_user.id},
     )
+
+    # Eager background extraction: starts parsing text/tables while user types prompt
+    async def _eager_extract(src: Source) -> None:
+        try:
+            await extraction_service.extract_source(src)
+        except Exception:
+            pass
+
+    import asyncio
+    asyncio.create_task(_eager_extract(source))
+
+    return source
 
 
 @router.post("/text", response_model=Source, status_code=status.HTTP_201_CREATED)

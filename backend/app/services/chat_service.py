@@ -134,9 +134,9 @@ class ChatService:
         Compliance notice: Never includes or accepts private model chain-of-thought.
         Only public safe execution summaries are permitted.
         """
-        clean_content = content.strip()
-        if not clean_content:
-            raise ValueError("Message content cannot be empty")
+        clean_content = content.strip() if content else ""
+        if not clean_content and not artifact_ids:
+            raise ValueError("Message content cannot be empty unless artifacts are attached")
 
         with get_connection(self.db_path) as conn:
             session = ChatRepository.get_session(conn, session_id)

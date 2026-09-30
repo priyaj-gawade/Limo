@@ -34,10 +34,10 @@ class Settings(BaseSettings):
     gemini_api_key: Optional[str] = None
     gemini_api_keys: Optional[str] = None
     primary_model: str = "gemini-flash-lite-latest"
-    fallback_models: List[str] = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash"]
+    fallback_models: List[str] = ["gemini-3.5-flash-lite"]
     llm_max_retries: int = 6
     llm_cooldown_duration_sec: float = 15.0
-    llm_timeout_sec: float = 75.0
+    llm_timeout_sec: float = 25.0
     llm_safety_margin: float = 1.0
     default_retrieval_token_budget: int = 2000
 
@@ -49,9 +49,9 @@ class Settings(BaseSettings):
     # Direct Content Extraction (Trafilatura + Crawl4AI fallback)
     web_crawl_timeout_sec: int = 15
 
-    # TTS & Voice Layer Configuration (Phase D8.3)
-    default_tts_provider: str = "azure"
-    default_tts_voice: str = "en-US-AndrewMultilingualNeural"
+    # TTS & Voice Layer Configuration (Phase D8.3 & Gemini Pro)
+    default_tts_provider: str = "gemini"
+    default_tts_voice: str = "Aoede"
 
     # Logging
     log_level: str = "INFO"

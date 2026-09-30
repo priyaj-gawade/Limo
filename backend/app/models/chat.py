@@ -24,7 +24,7 @@ class Message(LimoBaseModel):
     id: str = Field(default_factory=generate_message_id, description="Stable message ID with 'msg_' prefix")
     session_id: str = Field(description="Associated ChatSession ID")
     role: MessageRole = Field(description="Identity of the message author")
-    content: str = Field(description="Public conversational message text")
+    content: str = Field(default="", description="Public conversational message text")
     mode: Optional[FeatureMode] = Field(default=None, description="Active creation mode during turn submission")
     attachments: List[MessageAttachment] = Field(default_factory=list, description="User-supplied attachments")
     artifact_ids: List[str] = Field(default_factory=list, description="Referenced generated deliverable artifact IDs")

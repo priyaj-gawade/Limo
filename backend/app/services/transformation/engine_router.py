@@ -106,6 +106,14 @@ class EngineRouter:
             target_phase="D6.3 (Native Adapters)",
             dispatch_endpoint=None,
         ),
+        OutputFormat.INSTAGRAM: EngineRoute(
+            format=OutputFormat.INSTAGRAM,
+            engine_type=EngineType.NATIVE_SOCIAL,
+            target_extension=".json",
+            is_implemented=True,
+            target_phase="D10.9 (Instagram Skill)",
+            dispatch_endpoint=None,
+        ),
         OutputFormat.INFOGRAPHIC: EngineRoute(
             format=OutputFormat.INFOGRAPHIC,
             engine_type=EngineType.PRISMO_ENGINE,
@@ -154,6 +162,7 @@ class EngineRouter:
             OutputFormat.HTML: self._html_adapter,
             OutputFormat.LINKEDIN: self._social_adapter,
             OutputFormat.TWITTER: self._social_adapter,
+            OutputFormat.INSTAGRAM: self._social_adapter,
             OutputFormat.INFOGRAPHIC: self._prismo_adapter,
             OutputFormat.VIDEO: self._video_adapter,
             OutputFormat.DOCUMENT: self._genoffice_adapter,

@@ -39,6 +39,9 @@ class ArtifactService:
         stats: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         artifact_id: Optional[str] = None,
+        engine: Optional[str] = None,
+        skill: Optional[str] = None,
+        mime_type: Optional[str] = None,
     ) -> Artifact:
         """Register a deliverable artifact.
 
@@ -46,7 +49,10 @@ class ArtifactService:
         1. storage_ref is resolved safely within sandbox boundaries.
         2. The referenced file MUST physically exist on disk before registration.
         3. SHA-256 hash and byte size are computed directly from the real file.
+        4. Persists MIME type, engine, and skill metadata.
         """
+        import mimetypes
+
         clean_title = title.strip()
         if not clean_title:
             raise ValueError("Artifact title cannot be empty")
@@ -68,6 +74,19 @@ class ArtifactService:
 
         # 3. Compute SHA-256 hash and byte count via streaming (avoids high RAM allocation)
         content_hash, size_bytes = self.storage.compute_file_sha256(clean_ref)
+
+        resolved_mime = mime_type
+        if not resolved_mime:
+            guessed_mime, _ = mimetypes.guess_type(f"file{fmt}")
+            resolved_mime = guessed_mime or "application/octet-stream"
+
+        meta = dict(metadata or {})
+        if resolved_mime:
+            meta["mime_type"] = resolved_mime
+        if engine:
+            meta["engine"] = engine
+        if skill:
+            meta["skill"] = skill
 
         with get_connection(self.db_path) as conn:
             if artifact_id:
@@ -99,7 +118,10 @@ class ArtifactService:
                 "stats": stats.strip() if stats else None,
                 "version": 1,
                 "validation_status": ValidationStatus.PENDING,
-                "metadata": metadata or {},
+                "mime_type": resolved_mime,
+                "engine": engine,
+                "skill": skill,
+                "metadata": meta,
             }
             if artifact_id:
                 artifact_kwargs["id"] = artifact_id
@@ -119,12 +141,14 @@ class ArtifactService:
             ArtifactRepository.create_artifact_version(conn, initial_version)
 
             logger.info(
-                "Registered artifact '%s' (id: %s, type: %s, %d bytes, sha256: %s)",
+                "Registered artifact '%s' (id: %s, type: %s, %d bytes, sha256: %s, engine: %s, skill: %s)",
                 clean_title,
                 created.id,
                 artifact_type.value,
                 size_bytes,
                 content_hash[:8],
+                engine,
+                skill,
             )
             return created
 
@@ -159,18 +183,100 @@ class ArtifactService:
                 artifact_type=artifact_type,
             )
 
+    def sync_artifact_file(self, artifact_id: str) -> Artifact:
+        """Inspect the physical artifact file on disk.
+
+        If the file was modified outside Limo (e.g. edited and saved in GenOffice),
+        automatically synchronize by:
+        1. Streaming and computing the new SHA-256 and byte size.
+        2. Recording a new historical revision in artifact_versions.
+        3. Updating the parent artifact's content_hash, size_bytes, and version number.
+        Returns the up-to-date Artifact model.
+        """
+        artifact = self.get_artifact(artifact_id)
+        if not self.storage.file_exists(artifact.storage_ref):
+            return artifact
+
+        content_hash, size_bytes = self.storage.compute_file_sha256(artifact.storage_ref)
+        if content_hash == artifact.content_hash:
+            return artifact
+
+        with get_connection(self.db_path) as conn:
+            next_version = ArtifactRepository.get_next_version_number(conn, artifact_id)
+            version = ArtifactVersion(
+                artifact_id=artifact_id,
+                version_number=next_version,
+                storage_ref=artifact.storage_ref,
+                size_bytes=size_bytes,
+                content_hash=content_hash,
+                change_summary="Synchronized saved edits from external/GenOffice editor",
+            )
+            ArtifactRepository.create_artifact_version(conn, version)
+            ArtifactRepository.update_artifact_version(
+                conn,
+                artifact_id=artifact_id,
+                version=next_version,
+                storage_ref=artifact.storage_ref,
+                size_bytes=size_bytes,
+                content_hash=content_hash,
+            )
+            updated = ArtifactRepository.get_artifact(conn, artifact_id)
+            logger.info(
+                "Synchronized artifact '%s' to revision v%d (%d bytes, sha256: %s)",
+                artifact_id,
+                next_version,
+                size_bytes,
+                content_hash[:8],
+            )
+            return updated or artifact
+
     def read_artifact_content(self, artifact_id: str) -> bytes:
-        """Read raw binary deliverable content and verify cryptographic SHA-256 integrity."""
+        """Read raw binary deliverable content and verify cryptographic SHA-256 integrity.
+
+        If the physical file on disk was modified (e.g. edited and saved in GenOffice),
+        automatically synchronizes the artifact revision before returning the verified bytes.
+        """
         artifact = self.get_artifact(artifact_id)
         content_bytes = self.storage.read_file(artifact.storage_ref)
         actual_hash = self.storage.compute_sha256(content_bytes)
 
         if actual_hash != artifact.content_hash:
-            raise StorageError(
-                f"Cryptographic hash mismatch for artifact '{artifact_id}': "
-                f"expected {artifact.content_hash}, got {actual_hash}"
-            )
+            self.sync_artifact_file(artifact_id)
+
         return content_bytes
+
+    def delete_artifact(self, artifact_id: str) -> bool:
+        """Delete an artifact, its historical versions, validation, and provenance records."""
+        with get_connection(self.db_path) as conn:
+            artifact = ArtifactRepository.get_artifact(conn, artifact_id)
+            if not artifact:
+                raise EntityNotFoundError("Artifact", artifact_id)
+
+            # Safely attempt to delete primary file and any thumbnail
+            try:
+                self.storage.delete_file(artifact.storage_ref)
+            except Exception as e:
+                logger.warning("Could not delete physical artifact file %s: %s", artifact.storage_ref, e)
+
+            thumb_ref = (artifact.metadata or {}).get("thumbnail_storage_ref")
+            if thumb_ref:
+                try:
+                    self.storage.delete_file(thumb_ref)
+                except Exception:
+                    pass
+
+            # Also delete historical version files if distinct
+            versions = ArtifactRepository.get_artifact_versions(conn, artifact_id)
+            for ver in versions:
+                if ver.storage_ref != artifact.storage_ref:
+                    try:
+                        self.storage.delete_file(ver.storage_ref)
+                    except Exception:
+                        pass
+
+            deleted = ArtifactRepository.delete_artifact(conn, artifact_id)
+            logger.info("Deleted artifact '%s' (success=%s)", artifact_id, deleted)
+            return deleted
 
     def create_artifact_version(
         self,

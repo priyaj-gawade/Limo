@@ -70,11 +70,10 @@ export const Composer: React.FC<ComposerProps> = ({
             (window as any).__LIMO_DESKTOP__
           );
 
-          // On deployed web version, only active and working edge_tts voices are shown.
-          // Azure, OpenAI, and Piper remain available in the offline/desktop environment.
+          // Load all active, available voices (Gemini Pro neural voices + Edge TTS fallback)
           const availableVoices = isDesktopApp
             ? data.voices
-            : data.voices.filter((v) => v.provider === 'edge_tts');
+            : data.voices.filter((v) => v.is_available !== false);
 
           setVoices(availableVoices);
           const def = availableVoices.find((v) => v.is_configured_default) || availableVoices[0];
@@ -383,30 +382,32 @@ export const Composer: React.FC<ComposerProps> = ({
               <Plus size={18} />
             </button>
 
-            {/* Audio Mode Specific Controls: Mode Pill & Contextual Voice Selector */}
-            {mode === 'audio' && (
+            {/* Audio & Video Mode Specific Controls: Mode Pill & Contextual Voice Selector */}
+            {(mode === 'audio' || mode === 'video') && (
               <>
-                <div className="active-mode-pill audio-mode-pill" title="Audio creation mode active">
-                  <Volume2 size={13} />
-                  <span className="pill-mode-name">Audio</span>
-                  <button
-                    className="pill-close-btn"
-                    onClick={onClearMode}
-                    title="Remove Audio mode"
-                    aria-label="Remove Audio creation mode"
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
+                {mode === 'audio' && (
+                  <div className="active-mode-pill audio-mode-pill" title="Audio creation mode active">
+                    <Volume2 size={13} />
+                    <span className="pill-mode-name">Audio</span>
+                    <button
+                      className="pill-close-btn"
+                      onClick={onClearMode}
+                      title="Remove Audio mode"
+                      aria-label="Remove Audio creation mode"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                )}
 
-                {/* Voice Selector (ElevenLabs style) - Contextual to Audio Mode */}
+                {/* Voice Selector - Contextual to Audio and Video Modes */}
                 <div className="voice-dropdown-wrapper" ref={voiceMenuRef}>
                   <button
                     type="button"
                     className="voice-selector-btn"
                     onClick={() => setVoiceMenuOpen(!voiceMenuOpen)}
-                    title="Select Voice & Narration Engine"
-                    aria-label="Select Voice & Narration Engine"
+                    title={mode === 'video' ? 'Select Video Narration Voice' : 'Select Voice & Narration Engine'}
+                    aria-label={mode === 'video' ? 'Select Video Narration Voice' : 'Select Voice & Narration Engine'}
                   >
                     <Volume2 size={14} className="voice-icon" />
                     <span className="voice-name">
@@ -922,6 +923,11 @@ export const Composer: React.FC<ComposerProps> = ({
           color: var(--text-muted);
         }
 
+        .voice-provider-tag.gemini {
+          background: rgba(99, 102, 241, 0.15);
+          color: #6366f1;
+        }
+
         .voice-provider-tag.azure {
           background: rgba(59, 130, 246, 0.15);
           color: #3b82f6;
@@ -1025,6 +1031,11 @@ export const Composer: React.FC<ComposerProps> = ({
           padding: 2px 5px;
           border-radius: 4px;
           text-transform: uppercase;
+        }
+
+        .voice-opt-badge.gemini {
+          background: rgba(99, 102, 241, 0.15);
+          color: #6366f1;
         }
 
         .voice-opt-badge.azure {

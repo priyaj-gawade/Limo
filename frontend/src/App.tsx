@@ -27,7 +27,8 @@ export const App: React.FC = () => {
       (window as any).electron ||
       (window as any).electronAPI ||
       navigator.userAgent.includes('Electron') ||
-      (window as any).__LIMO_DESKTOP__
+      (window as any).__LIMO_DESKTOP__ ||
+      (window.parent && window.parent !== window)
     );
   };
 
@@ -57,6 +58,19 @@ export const App: React.FC = () => {
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
+
+  // Sync view state when running inside GenOffice shell or parent container
+  useEffect(() => {
+    const handleParentMsg = (e: MessageEvent) => {
+      if (e.data?.type === 'SWITCH_TO_LIMO' || (e.data?.type === 'SET_VIEW' && e.data?.view === 'limo')) {
+        setCurrentView('limo');
+      } else if (e.data?.type === 'SWITCH_TO_OFFICE' || (e.data?.type === 'SET_VIEW' && e.data?.view === 'office')) {
+        setCurrentView('genoffice');
+      }
+    };
+    window.addEventListener('message', handleParentMsg);
+    return () => window.removeEventListener('message', handleParentMsg);
+  }, []);
   
   // UI Preference only: sidebar collapsed state
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
@@ -145,6 +159,12 @@ export const App: React.FC = () => {
               sizeBytes: a.size_bytes,
               stats: a.stats,
               metadata: a.metadata,
+              mimeType: a.mime_type,
+              engine: a.engine,
+              skill: a.skill,
+              storagePath: a.storage_path,
+              sha256: a.sha256,
+              version: a.version,
               thumbnailUrl: `/api/v1/artifacts/${a.id}/thumbnail`,
               createdAt: a.created_at,
             })),
@@ -476,9 +496,24 @@ export const App: React.FC = () => {
 
   const handleGenOfficeNavClick = () => {
     if (isDesktop()) {
-      setCurrentView('genoffice');
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'SWITCH_TO_OFFICE' }, '*');
+      } else {
+        setCurrentView('genoffice');
+      }
     } else {
       setFeatureInfoType('office');
+    }
+  };
+
+  const handleViewChange = (view: 'limo' | 'genoffice') => {
+    if (view === 'limo') {
+      setCurrentView('limo');
+      if (isDesktop() && window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'SWITCH_TO_LIMO' }, '*');
+      }
+    } else {
+      handleGenOfficeNavClick();
     }
   };
 
@@ -493,7 +528,7 @@ export const App: React.FC = () => {
           collapsed={sidebarCollapsed}
           onToggleCollapse={toggleSidebar}
           currentView={currentView}
-          onViewChange={setCurrentView}
+          onViewChange={handleViewChange}
           onGenOfficeClick={handleGenOfficeNavClick}
           activeMode={activeMode}
           onSelectMode={handleSelectMode}

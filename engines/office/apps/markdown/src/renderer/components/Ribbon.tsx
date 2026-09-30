@@ -4,6 +4,7 @@ import type { Editor } from '@tiptap/core'
 import { useEditorState } from '@tiptap/react'
 import {
   Dropdown,
+  LimoMascot,
   RibbonCollapseButton,
   RibbonExpandButton,
   useDismissablePopover,
@@ -11,7 +12,6 @@ import {
 } from '@genoffice/ui'
 import { useI18n } from '../i18n/locale'
 import type { StringKey } from '../i18n/locale'
-import { GensparkMark } from '../ai/AiPanel'
 import { uiOp, type BlockType, type ListKind, type StylableMark } from '../editor/ops'
 import {
   IconBullets,
@@ -313,9 +313,9 @@ export function Ribbon({
               onClick={onToggleAi}
             >
               <span className="rb-big-icon">
-                <GensparkMark size={26} />
+                <LimoMascot size={26} interactive={true} />
               </span>
-              <span>Genspark AI</span>
+              <span>Limo AI</span>
             </button>
             {aiPresets.map(({ kind, btn, prompt }) => (
               <button

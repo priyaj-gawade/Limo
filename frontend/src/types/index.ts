@@ -47,7 +47,30 @@ export type ArtifactType =
   | 'audio'
   | 'infographic'
   | 'website'
-  | 'code';
+  | 'code'
+  | 'post';
+
+export interface SocialSlideItem {
+  slide_number: number;
+  headline: string;
+  caption: string;
+  visual_suggestion?: string;
+}
+
+export interface SocialDraftData {
+  platform: 'linkedin' | 'twitter' | 'instagram' | string;
+  status: 'Draft';
+  title?: string;
+  hook?: string;
+  body?: string;
+  content?: string;
+  call_to_action?: string;
+  hashtags?: string[];
+  tweets?: string[];
+  slides?: SocialSlideItem[];
+  formatted_text?: string;
+  character_count?: number;
+}
 
 export interface VoiceOption {
   provider: string;
@@ -72,13 +95,19 @@ export interface Artifact {
   title: string;
   type: ArtifactType;
   description: string;
-  fileFormat: string; // '.docx', '.pptx', '.xlsx', '.mp4', '.html', '.ts'
+  fileFormat: string; // '.docx', '.pptx', '.xlsx', '.mp4', '.html', '.ts', '.md', '.json'
   sizeBytes?: number;
   stats?: string;     // e.g. '12 Slides • 16:9', '4 Pages • 1,840 Words', '1080p • 01:24'
   previewContent?: string;
   sourceCitations?: string[];
   thumbnailUrl?: string;
   metadata?: Record<string, any>;
+  mimeType?: string;
+  engine?: string;
+  skill?: string;
+  storagePath?: string;
+  sha256?: string;
+  version?: number;
   createdAt: string;
 }
 

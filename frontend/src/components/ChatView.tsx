@@ -28,6 +28,8 @@ import { getFileCategory, getCategorySubtitle, renderAttachmentBadge } from '../
 import { LimoMascot } from './LimoMascot';
 import { ThinkingTextAnimation } from './ThinkingTextAnimation';
 import { LimoAudioPlayer } from './LimoAudioPlayer';
+import { SocialDraftCard } from './SocialDraftCard';
+import { parseSocialDraft, stripSocialMetadata, toPublishablePlainText } from '../utils/socialDraftParser';
 
 interface ChatViewProps {
   session: ChatSession;
@@ -87,7 +89,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView?.({ behavior: 'smooth' });
   }, [session.messages, isGenerating]);
 
   const getArtifactIcon = (type: Artifact['type']) => {
@@ -236,6 +238,31 @@ export const ChatView: React.FC<ChatViewProps> = ({
               );
             }
 
+            // Process social draft detection and clean content
+            const socialDraftResult = parseSocialDraft(message.content);
+            const displayArtifacts: Artifact[] = message.artifacts ? [...message.artifacts] : [];
+
+            if (socialDraftResult.isDraft && socialDraftResult.artifact) {
+              const alreadyHasSocial = displayArtifacts.some(
+                (art) =>
+                  art.type === 'post' ||
+                  Boolean(art.metadata?.social_draft) ||
+                  ['linkedin', 'twitter', 'instagram'].includes(art.skill || '') ||
+                  ['linkedin', 'twitter', 'instagram'].includes(art.metadata?.platform || '')
+              );
+              if (!alreadyHasSocial) {
+                displayArtifacts.push(socialDraftResult.artifact);
+              }
+            }
+
+            // Clean visible message content to hide raw YAML metadata headers
+            let displayContent = message.content;
+            if (socialDraftResult.isDraft) {
+              displayContent = socialDraftResult.cleanContent;
+            } else if (displayArtifacts.some((art) => art.type === 'post' || Boolean(art.metadata?.social_draft))) {
+              displayContent = stripSocialMetadata(displayContent);
+            }
+
             return (
               <div key={message.id} className="message-row assistant-turn">
                 <div className="limo-mascot-col">
@@ -279,14 +306,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   )}
 
                   {/* Main Message Text (Rich Markdown Presentation) */}
-                  <div className="message-content-text">
-                    <MarkdownMessage content={message.content} />
-                  </div>
+                  {displayContent && displayContent.trim().length > 0 && (
+                    <div className="message-content-text">
+                      <MarkdownMessage content={displayContent} />
+                    </div>
+                  )}
 
                   {/* Interactive Artifact Cards */}
-                  {message.artifacts && message.artifacts.length > 0 && (
+                  {displayArtifacts.length > 0 && (
                     <div className="artifacts-grid">
-                      {message.artifacts.map((art) => {
+                      {displayArtifacts.map((art) => {
                         if (art.type === 'video') {
                           return (
                             <VideoPlayerCard
@@ -345,6 +374,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
                               key={art.id}
                               src={`/api/v1/artifacts/${art.id}/download`}
                               onDownload={() => onDownloadArtifact && onDownloadArtifact(art)}
+                            />
+                          );
+                        }
+
+                        const isSocialDraft =
+                          art.type === 'post' ||
+                          Boolean(art.metadata?.social_draft) ||
+                          ['linkedin', 'twitter', 'instagram'].includes(art.skill || '') ||
+                          ['linkedin', 'twitter', 'instagram'].includes(art.metadata?.platform || '');
+
+                        if (isSocialDraft) {
+                          return (
+                            <SocialDraftCard
+                              key={art.id}
+                              artifact={art}
+                              onDownloadArtifact={onDownloadArtifact}
                             />
                           );
                         }
@@ -416,8 +461,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     <button
                       className="msg-action-btn"
                       onClick={() => {
-                        navigator.clipboard.writeText(message.content);
-                        showToast('Copied to clipboard', 'success');
+                        const textToCopy = socialDraftResult.isDraft
+                          ? toPublishablePlainText(socialDraftResult.content || displayContent || message.content)
+                          : message.content;
+                        navigator.clipboard.writeText(textToCopy);
+                        showToast('Copied ready-to-publish draft', 'success');
                       }}
                       title="Copy message"
                     >

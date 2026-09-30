@@ -272,7 +272,8 @@ class GenOfficeAutomationClient:
 
         clean_path_str = str(target_path)
 
-        # 1. Tier 1: Try local HTTP open action if GenOffice server is active
+        # 1. Tier 1: Ensure GenOffice is running and try local HTTP open action
+        self.ensure_genoffice_running()
         meta = self.get_discovery_metadata()
         if meta:
             host = meta.get("host", "127.0.0.1")

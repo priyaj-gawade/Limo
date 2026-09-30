@@ -115,6 +115,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Switcher inserted at top of side navbar */}
       <div className="sidebar-switch-wrapper">
         <div className={`sidebar-view-toggle ${collapsed ? 'collapsed' : ''}`} role="tablist">
+          {!collapsed && (
+            <div
+              className={`sidebar-toggle-glider ${currentView === 'genoffice' ? 'office' : 'limo'}`}
+              aria-hidden="true"
+            />
+          )}
           <button
             className={`sidebar-toggle-btn ${currentView === 'limo' ? 'active' : ''}`}
             onClick={() => onViewChange('limo')}
@@ -398,8 +404,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
           border: 1px solid var(--border-subtle);
           border-radius: var(--radius-pill);
           padding: 3px;
-          gap: 2px;
+          gap: 0;
           position: relative;
+          overflow: hidden;
+        }
+
+        .sidebar-toggle-glider {
+          position: absolute;
+          top: 3px;
+          bottom: 3px;
+          left: 3px;
+          width: calc(50% - 3px);
+          background: var(--bg-sidebar-active);
+          border-radius: var(--radius-pill);
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+          transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+          pointer-events: none;
+          z-index: 1;
+        }
+
+        .sidebar-toggle-glider.limo {
+          transform: translateX(0%);
+        }
+
+        .sidebar-toggle-glider.office,
+        .sidebar-toggle-glider.genoffice {
+          transform: translateX(100%);
+        }
+
+        .sidebar-view-toggle.collapsed .sidebar-toggle-glider {
+          display: none;
         }
 
         .sidebar-view-toggle.collapsed {
@@ -411,9 +445,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           gap: 4px;
           width: 40px;
           box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+          overflow: visible;
         }
 
         .sidebar-toggle-btn {
+          position: relative;
+          z-index: 2;
           flex: 1;
           display: flex;
           align-items: center;
@@ -422,25 +459,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
           padding: 6px 10px;
           border-radius: var(--radius-pill);
           border: none;
-          background: transparent;
+          background: transparent !important;
           color: var(--text-secondary);
           font-size: 12px;
           font-weight: 500;
           cursor: pointer;
-          transition: all 0.16s ease;
+          transition: color 0.18s ease;
           white-space: nowrap;
+          box-shadow: none !important;
         }
 
         .sidebar-toggle-btn:hover:not(.active) {
           color: var(--text-primary);
-          background: var(--bg-sidebar-hover);
+          background: transparent !important;
         }
 
         .sidebar-toggle-btn.active {
           color: var(--text-primary);
-          background: var(--bg-sidebar-active);
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
           font-weight: 600;
+          background: transparent !important;
+          box-shadow: none !important;
         }
 
         .sidebar-view-toggle.collapsed .sidebar-toggle-btn {
@@ -456,14 +494,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         .sidebar-view-toggle.collapsed .sidebar-toggle-btn:hover:not(.active) {
           color: var(--text-primary);
-          background: var(--bg-sidebar-hover);
+          background: var(--bg-sidebar-hover) !important;
         }
 
         .sidebar-view-toggle.collapsed .sidebar-toggle-btn.active {
-          background: var(--bg-sidebar-active);
+          background: var(--bg-sidebar-active) !important;
           color: var(--text-primary);
-          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2) !important;
         }
+
 
         .new-chat-wrapper {
           padding: 12px 14px;

@@ -21,8 +21,9 @@ logger = logging.getLogger("limo.agent.skills")
 class SkillRegistry:
     """Registry discovering and managing file-backed skills (SKILL.md)."""
 
-    def __init__(self, skills_dir: Optional[Path] = None) -> None:
+    def __init__(self, skills_dir: Optional[Path] = None, root_skills_dir: Optional[Path] = None) -> None:
         self.skills_dir = skills_dir or (Path(__file__).parent / "builtin")
+        self.root_skills_dir = root_skills_dir or (Path(__file__).resolve().parents[4] / "skills")
         self._skills: Dict[str, SkillDefinition] = {}
         self.discover()
 
@@ -93,18 +94,26 @@ class SkillRegistry:
         return list(matched.values())
 
     def discover(self) -> None:
-        """Scan skills directory for folders containing SKILL.md and load them."""
-        if not self.skills_dir.exists() or not self.skills_dir.is_dir():
-            logger.warning("Skills directory does not exist: %s", self.skills_dir)
-            return
+        """Scan skills directories (root skills/ and builtin/) for SKILL.md and load them."""
+        # 1. Scan builtin skills
+        if self.skills_dir.exists() and self.skills_dir.is_dir():
+            for skill_md in self.skills_dir.glob("**/SKILL.md"):
+                try:
+                    skill = self._parse_skill_file(skill_md)
+                    self.register(skill)
+                    logger.debug("Discovered builtin skill '%s' from %s", skill.name, skill_md)
+                except Exception as e:
+                    logger.error("Failed to parse skill at %s: %s", skill_md, e)
 
-        for skill_md in self.skills_dir.glob("**/SKILL.md"):
-            try:
-                skill = self._parse_skill_file(skill_md)
-                self.register(skill)
-                logger.debug("Discovered skill '%s' from %s", skill.name, skill_md)
-            except Exception as e:
-                logger.error("Failed to parse skill at %s: %s", skill_md, e)
+        # 2. Scan repository root skills/ (Claude/Codex-style modular skills)
+        if self.root_skills_dir.exists() and self.root_skills_dir.is_dir():
+            for skill_md in self.root_skills_dir.glob("**/SKILL.md"):
+                try:
+                    skill = self._parse_skill_file(skill_md)
+                    self.register(skill)
+                    logger.debug("Discovered root skill '%s' from %s", skill.name, skill_md)
+                except Exception as e:
+                    logger.error("Failed to parse root skill at %s: %s", skill_md, e)
 
     def _parse_skill_file(self, file_path: Path) -> SkillDefinition:
         """Parse YAML frontmatter and markdown body from a SKILL.md file."""
@@ -128,21 +137,27 @@ class SkillRegistry:
         
         name = str(data.get("name") or file_path.parent.name)
         description = str(data.get("description") or "")
+        version = str(data.get("version") or "1.0.0")
         category = str(data.get("category") or "general")
         triggers = list(data.get("triggers") or [])
         deliverables = list(data.get("deliverables") or [])
         modes = list(data.get("modes") or [])
         intents = list(data.get("intents") or [])
+        supported_inputs = list(data.get("supported_inputs") or [])
+        supported_outputs = list(data.get("supported_outputs") or [])
         required_tools = list(data.get("required_tools") or [])
 
         return SkillDefinition(
             name=name,
             description=description,
+            version=version,
             category=category,
             triggers=triggers,
             deliverables=deliverables,
             modes=modes,
             intents=intents,
+            supported_inputs=supported_inputs,
+            supported_outputs=supported_outputs,
             required_tools=required_tools,
             system_instructions=body,
             path=str(file_path.resolve()),

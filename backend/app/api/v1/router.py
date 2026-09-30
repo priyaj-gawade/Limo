@@ -10,6 +10,7 @@ from .artifacts import router as artifacts_router
 from .transform import router as transform_router
 from .voices import router as voices_router
 from .auth import router as auth_router
+from .skills import router as skills_router
 
 api_v1_router = APIRouter(prefix="/v1")
 api_v1_router.include_router(health_router)
@@ -21,5 +22,6 @@ api_v1_router.include_router(artifacts_router)
 api_v1_router.include_router(transform_router)
 api_v1_router.include_router(voices_router)
 api_v1_router.include_router(auth_router)
+api_v1_router.include_router(skills_router)
 
 

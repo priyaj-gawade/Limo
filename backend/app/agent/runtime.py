@@ -27,7 +27,8 @@ from ..models.transformation import (
     PlannedDeliverable,
     TransformationRequest,
 )
-from ..services.artifact_service import artifact_service
+from ..models.artifact import Artifact
+from ..services.artifact_service import ArtifactService, artifact_service
 from ..services.chat_service import ChatService, chat_service
 from ..services.extraction.models import ExtractedDocument
 from ..services.extraction.service import extraction_service
@@ -78,6 +79,7 @@ class LimoAgentRuntime:
         output_plan: Optional[OutputPlanner] = None,
         eng_router: Optional[EngineRouter] = None,
         jb_svc: Optional[JobService] = None,
+        art_svc: Optional[ArtifactService] = None,
     ):
         self.reasoning_engine = reasoning_engine or LLMReasoningEngine()
         self.context_manager = context_manager or AgentContextManager()
@@ -88,6 +90,7 @@ class LimoAgentRuntime:
         self.output_planner = output_plan or output_planner
         self.engine_router = eng_router or engine_router
         self.job_svc = jb_svc or job_service
+        self.artifact_svc = art_svc or artifact_service
         self.loop = AgentLoop(self.reasoning_engine, self.context_manager)
 
     async def _hydrate_unified_input_context(
@@ -109,13 +112,17 @@ class LimoAgentRuntime:
         canonical_contents: List[CanonicalContent] = []
         media_references: List[MediaReference] = []
 
-        for sid in effective_source_ids:
+        async def _hydrate_single(sid: str) -> Tuple[
+            Optional[Source],
+            Optional[ExtractedDocument],
+            Optional[MediaReference],
+            Optional[CanonicalContent],
+        ]:
             try:
                 source = source_service.get_source(sid)
-                sources.append(source)
             except Exception as e:
                 logger.warning("Could not fetch source '%s' during context hydration: %s", sid, e)
-                continue
+                return None, None, None, None
 
             # 1. D5 Extraction (with cache hit check: NO repeated extraction)
             doc = extraction_service.get_cached_extraction(source.id)
@@ -126,10 +133,8 @@ class LimoAgentRuntime:
                     logger.warning("D5 extraction error for source '%s': %s", source.id, e)
                     doc = None
 
-            if doc:
-                extracted_docs.append(doc)
-
             # 2. Native Media References (image, audio, video)
+            media_ref = None
             mime = (source.mime_type or "").lower()
             filename = (source.name or "").lower()
             is_img = "image" in mime or filename.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif"))
@@ -147,17 +152,15 @@ class LimoAgentRuntime:
                     except Exception as e:
                         logger.warning("Failed to resolve storage path for media '%s': %s", source.id, e)
 
-                media_references.append(
-                    MediaReference(
-                        source_id=source.id,
-                        media_type=media_type,
-                        mime_type=source.mime_type,
-                        file_path=file_path,
-                        name=source.name,
-                    )
+                media_ref = MediaReference(
+                    source_id=source.id,
+                    media_type=media_type,
+                    mime_type=source.mime_type,
+                    file_path=file_path,
+                    name=source.name,
                 )
 
-            # 3. D5 Canonicalization (Cache check first: NO repeated canonicalization)
+            # 3. D5 Fast-Tier Canonicalization (Cache hit first -> Fast deterministic CCM)
             from ..services.canonical.service import canonical_service
             from ..services.normalization.service import normalization_service
 
@@ -165,12 +168,23 @@ class LimoAgentRuntime:
             if not can and doc:
                 try:
                     norm_doc = normalization_service.normalize_extracted_document(doc)
-                    can = await canonical_service.canonicalize(norm_doc)
+                    can = canonical_service.get_or_create_fast_canonical(norm_doc)
                 except Exception as e:
-                    logger.info("Canonicalization skipped or deferred for source '%s': %s", source.id, e)
+                    logger.info("Fast canonicalization skipped or deferred for source '%s': %s", source.id, e)
 
-            if can:
-                canonical_contents.append(can)
+            return source, doc, media_ref, can
+
+        if effective_source_ids:
+            results = await asyncio.gather(*[_hydrate_single(sid) for sid in effective_source_ids])
+            for src, doc, media_ref, can in results:
+                if src:
+                    sources.append(src)
+                if doc:
+                    extracted_docs.append(doc)
+                if media_ref:
+                    media_references.append(media_ref)
+                if can:
+                    canonical_contents.append(can)
 
         return UnifiedInputContext(
             user_instruction=user_prompt,
@@ -180,6 +194,503 @@ class LimoAgentRuntime:
             extracted_documents=extracted_docs,
             canonical_contents=canonical_contents,
             media_references=media_references,
+        )
+
+    def _persist_social_draft_artifact(
+        self,
+        structured_draft: Dict[str, Any],
+        platform: str,
+        format_val: str,
+        hook_val: Optional[str],
+        content_val: str,
+        tweets: List[Dict[str, Any]],
+        slides: List[Dict[str, Any]],
+        hashtags: List[str],
+        source_refs: List[str],
+        warnings: List[str],
+        media_suggestion: Optional[str],
+        project_id: Optional[str],
+        clean_content: str,
+    ) -> Tuple[Optional[Artifact], str]:
+        """Persist structured social draft artifact to storage sandbox and register in database."""
+        file_format = ".json" if platform == "twitter" else ".md"
+        mime_type = "application/json" if platform == "twitter" else "text/markdown"
+        if platform == "twitter":
+            content_bytes = json.dumps(structured_draft, indent=2).encode("utf-8")
+        else:
+            content_bytes = content_val.encode("utf-8")
+
+        from ..core.ids import generate_artifact_id
+        artifact_id = generate_artifact_id()
+        slug_title = re.sub(r"[^a-zA-Z0-9]+", "_", hook_val or format_val)[:30].strip("_") or "draft"
+        clean_filename = f"{platform}_{slug_title}{file_format}"
+
+        # Persist to sandboxed storage
+        storage = getattr(self.artifact_svc, "storage", None) or storage_service
+        storage_ref, size_bytes, sha256_hash = storage.save_artifact_file(
+            artifact_id=artifact_id,
+            filename=clean_filename,
+            content=content_bytes,
+        )
+
+        platform_label = "LinkedIn" if platform == "linkedin" else ("X / Twitter" if platform == "twitter" else "Instagram")
+        if platform == "twitter" and tweets:
+            stats = f"{len(tweets)} Tweet{'s' if len(tweets) > 1 else ''} • Thread • Draft"
+        elif platform == "instagram" and slides:
+            stats = f"{len(slides)} Slides • Carousel • Draft"
+        else:
+            stats = f"{platform_label} Post • Draft"
+
+        # Register first-class artifact
+        artifact = self.artifact_svc.register_artifact(
+            artifact_id=artifact_id,
+            title=f"{platform_label} {format_val.replace('_', ' ').title()} Draft",
+            artifact_type=ArtifactType.POST,
+            file_format=file_format,
+            storage_ref=storage_ref,
+            project_id=project_id,
+            mime_type=mime_type,
+            engine="social",
+            skill=platform,
+            stats=stats,
+            description=hook_val or f"{platform_label} draft deliverable",
+            metadata={
+                "platform": platform,
+                "format": format_val,
+                "status": "Draft",
+                "hook": hook_val,
+                "hashtags": hashtags,
+                "source_references": source_refs,
+                "warnings": warnings,
+                "media_suggestion": media_suggestion,
+                "social_draft": structured_draft,
+                "engine": "social",
+                "skill": platform,
+            },
+        )
+
+        return artifact, clean_content
+
+    def _detect_and_register_social_draft(
+        self,
+        response_text: str,
+        session_id: str,
+        project_id: Optional[str] = None,
+    ) -> Tuple[Optional[Artifact], str]:
+        """Detect structured social draft output, register it as a first-class deliverable Artifact,
+        and return the Artifact plus clean conversational message content without raw JSON/YAML metadata."""
+        if not response_text:
+            return None, response_text
+
+        # 1. Try Canonical JSON Detection first
+        json_data = None
+        json_preamble = ""
+
+        # Check for fenced JSON
+        fence_json_match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", response_text, re.IGNORECASE)
+        if fence_json_match:
+            try:
+                parsed = json.loads(fence_json_match.group(1).strip())
+                if isinstance(parsed, dict):
+                    json_data = parsed
+                    json_preamble = response_text[:fence_json_match.start()].strip()
+            except Exception:
+                pass
+
+        if json_data is None:
+            raw_text = response_text.strip()
+            if raw_text.startswith("{") and raw_text.endswith("}"):
+                try:
+                    parsed = json.loads(raw_text)
+                    if isinstance(parsed, dict):
+                        json_data = parsed
+                        json_preamble = ""
+                except Exception:
+                    pass
+            else:
+                first_brace = response_text.find("{")
+                last_brace = response_text.rfind("}")
+                if first_brace != -1 and last_brace > first_brace:
+                    try:
+                        candidate = response_text[first_brace:last_brace + 1].strip()
+                        parsed = json.loads(candidate)
+                        if isinstance(parsed, dict):
+                            json_data = parsed
+                            json_preamble = response_text[:first_brace].strip()
+                    except Exception:
+                        pass
+
+        # Validate minimally required social payload (Tightened contract: avoid false positives)
+        if json_data and isinstance(json_data, dict):
+            raw_plat = str(json_data.get("platform", "")).lower().strip()
+            if raw_plat in ("linkedin", "twitter", "x", "instagram"):
+                raw_format = json_data.get("format")
+                has_format = isinstance(raw_format, str) and bool(raw_format.strip())
+                has_content = isinstance(json_data.get("content"), str) and bool(json_data.get("content", "").strip())
+                has_items = isinstance(json_data.get("items"), list) and len(json_data.get("items")) > 0
+                has_slides = isinstance(json_data.get("slides"), list) and len(json_data.get("slides")) > 0
+                has_tweets = isinstance(json_data.get("tweets"), list) and len(json_data.get("tweets")) > 0
+
+                if has_format and (has_content or has_items or has_slides or has_tweets):
+                    platform = "twitter" if raw_plat == "x" else raw_plat
+                    format_val = str(raw_format or ("thread" if platform == "twitter" else "post")).lower().strip()
+                    hook_val = str(json_data.get("hook")).strip() if json_data.get("hook") is not None else None
+                    status_val = str(json_data.get("status") or "Draft").strip()
+                    media_suggestion = str(json_data.get("media_suggestion")).strip() if json_data.get("media_suggestion") is not None else None
+
+                    # Hashtags
+                    hashtags = []
+                    raw_hashtags = json_data.get("hashtags")
+                    if isinstance(raw_hashtags, list):
+                        hashtags = [str(h).strip() for h in raw_hashtags if str(h).strip()]
+                    elif isinstance(raw_hashtags, str):
+                        hashtags = [h for h in re.split(r"[\s,]+", raw_hashtags) if h.startswith("#")]
+
+                    # Source references
+                    source_refs = []
+                    raw_refs = json_data.get("source_references")
+                    if isinstance(raw_refs, list):
+                        source_refs = [str(r).strip() for r in raw_refs if str(r).strip()]
+                    elif isinstance(raw_refs, str):
+                        source_refs = [raw_refs.strip()]
+
+                    # Warnings
+                    warnings = []
+                    raw_warnings = json_data.get("warnings")
+                    if isinstance(raw_warnings, list):
+                        warnings = [str(w).strip() for w in raw_warnings if str(w).strip()]
+
+                    # Content
+                    content_val = str(json_data.get("content") or "").strip()
+
+                    # Handle Twitter thread items
+                    tweets = []
+                    if platform == "twitter":
+                        raw_items = json_data.get("items")
+                        raw_tweets = json_data.get("tweets")
+                        if isinstance(raw_items, list) and len(raw_items) > 0:
+                            for idx, item in enumerate(raw_items):
+                                if isinstance(item, dict):
+                                    txt = str(item.get("text") or item.get("content") or "").strip()
+                                    num = int(item.get("tweet_number") or idx + 1)
+                                else:
+                                    txt = str(item).strip()
+                                    num = idx + 1
+                                if txt:
+                                    tweets.append({"tweet_number": num, "text": txt, "char_count": len(txt)})
+                        elif isinstance(raw_tweets, list) and len(raw_tweets) > 0:
+                            for idx, t in enumerate(raw_tweets):
+                                txt = str(t).strip()
+                                if txt:
+                                    tweets.append({"tweet_number": idx + 1, "text": txt, "char_count": len(txt)})
+                        elif content_val:
+                            thread_parts = re.split(r"\n\s*---\s*\n|\n\s*---\s*$", content_val)
+                            if len(thread_parts) > 1:
+                                tweets = [
+                                    {"tweet_number": i + 1, "text": t.strip(), "char_count": len(t.strip())}
+                                    for i, t in enumerate(thread_parts)
+                                    if t.strip()
+                                ]
+                            else:
+                                tweet_splits = re.split(r"(?:^|\n)(?:🧵\s*)?(\d+)\s*/\s*(?:\d+|\{total\}|N)?[:\s-]", content_val)
+                                if len(tweet_splits) > 2:
+                                    current_tweets = []
+                                    for i in range(1, len(tweet_splits), 2):
+                                        num = int(tweet_splits[i])
+                                        txt = tweet_splits[i + 1].strip()
+                                        current_tweets.append({"tweet_number": num, "text": txt, "char_count": len(txt)})
+                                    if current_tweets:
+                                        tweets = current_tweets
+                            if not tweets and content_val:
+                                tweets = [{"tweet_number": 1, "text": content_val, "char_count": len(content_val)}]
+
+                    # Handle Instagram slides
+                    slides = []
+                    if platform == "instagram" or format_val == "carousel":
+                        raw_slides = json_data.get("slides")
+                        raw_items = json_data.get("items")
+                        candidate_slides = raw_slides if isinstance(raw_slides, list) else (
+                            raw_items if isinstance(raw_items, list) and len(raw_items) > 0 and isinstance(raw_items[0], dict) and ("headline" in raw_items[0] or "slide_number" in raw_items[0]) else None
+                        )
+                        if candidate_slides:
+                            for idx, s in enumerate(candidate_slides):
+                                if isinstance(s, dict):
+                                    s_num = int(s.get("slide_number") or idx + 1)
+                                    s_headline = str(s.get("headline") or f"Slide {s_num}").strip()
+                                    s_subheadline = str(s.get("subheadline")).strip() if s.get("subheadline") else None
+                                    s_body = str(s.get("body")).strip() if s.get("body") else None
+                                    s_visual = str(s.get("visual_prompt") or s.get("visual")).strip() if (s.get("visual_prompt") or s.get("visual")) else None
+                                    s_type = str(s.get("type") or ("cover" if s_num == 1 else "insight")).strip()
+                                    slides.append({
+                                        "slide_number": s_num,
+                                        "type": s_type,
+                                        "headline": s_headline,
+                                        "subheadline": s_subheadline,
+                                        "body": s_body,
+                                        "visual_prompt": s_visual,
+                                    })
+                        elif content_val:
+                            slide_matches = list(re.finditer(r"(?:^|\n)(?:###?\s*)?Slide\s*(\d+)[:\s-]*([^\n]*)([\s\S]*?)(?=(?:(?:^|\n)(?:###?\s*)?Slide\s*\d+)|\s*$)", content_val, re.IGNORECASE))
+                            if slide_matches:
+                                breakdown_idx = re.search(r"(?:Carousel\s+Slides\s+Breakdown|Slide\s*1[:\s-])", content_val, re.IGNORECASE)
+                                if breakdown_idx and breakdown_idx.start() > 0:
+                                    caption_only = content_val[:breakdown_idx.start()].strip()
+                                    if caption_only:
+                                        content_val = caption_only
+
+                                for sm in slide_matches:
+                                    num = int(sm.group(1))
+                                    header = sm.group(2).strip()
+                                    body_blk = sm.group(3).strip()
+
+                                    h_match = re.search(r"(?:•\s*)?Headline:\s*([^\n]+)", body_blk, re.IGNORECASE)
+                                    headline = h_match.group(1).strip() if h_match else (header or f"Slide {num}")
+
+                                    sub_match = re.search(r"(?:•\s*)?Subheadline:\s*([^\n]+)", body_blk, re.IGNORECASE)
+                                    subheadline = sub_match.group(1).strip() if sub_match else None
+
+                                    b_match = re.search(r"(?:•\s*)?Body:\s*([\s\S]*?)(?=(?:•\s*Visual|\n\s*•|\n\s*Slide|$))", body_blk, re.IGNORECASE)
+                                    slide_body = b_match.group(1).strip() if b_match else None
+
+                                    v_match = re.search(r"(?:•\s*)?Visual(?:\s*Prompt)?:\s*([^\n]+)", body_blk, re.IGNORECASE)
+                                    visual = v_match.group(1).strip() if v_match else None
+
+                                    s_type = "insight"
+                                    lower_comb = f"{header} {headline}".lower()
+                                    if "cover" in lower_comb or num == 1:
+                                        s_type = "cover"
+                                    elif any(k in lower_comb for k in ("cta", "save", "follow")):
+                                        s_type = "cta"
+                                    elif any(k in lower_comb for k in ("data", "number")):
+                                        s_type = "data"
+
+                                    slides.append({
+                                        "slide_number": num,
+                                        "type": s_type,
+                                        "headline": headline,
+                                        "subheadline": subheadline,
+                                        "body": slide_body,
+                                        "visual_prompt": visual,
+                                    })
+
+                    structured_draft = {
+                        "platform": platform,
+                        "format": format_val,
+                        "hook": hook_val,
+                        "content": content_val,
+                        "hashtags": hashtags,
+                        "source_references": source_refs,
+                        "warnings": warnings,
+                        "media_suggestion": media_suggestion,
+                        "status": status_val,
+                        "items": tweets if tweets else (slides if slides else None),
+                        "tweets": [t["text"] for t in tweets] if tweets else None,
+                        "slides": slides if slides else None,
+                        "total_slides": len(slides) if slides else None,
+                    }
+
+                    return self._persist_social_draft_artifact(
+                        structured_draft=structured_draft,
+                        platform=platform,
+                        format_val=format_val,
+                        hook_val=hook_val,
+                        content_val=content_val,
+                        tweets=tweets,
+                        slides=slides,
+                        hashtags=hashtags,
+                        source_refs=source_refs,
+                        warnings=warnings,
+                        media_suggestion=media_suggestion,
+                        project_id=project_id,
+                        clean_content=json_preamble,
+                    )
+
+        # 2. Existing YAML fallback detection
+        plat_match = re.search(r"(?:^|\n)\s*(?:-\s*)?platform:\s*[\"']?(linkedin|twitter|x|instagram)[\"']?", response_text, re.IGNORECASE)
+        if not plat_match:
+            return None, response_text
+
+        has_social_markers = bool(re.search(r"(?:^|\n)\s*(?:-\s*)?(?:format|hook|hashtags|source_references|status|content):\s*", response_text, re.IGNORECASE))
+        if not has_social_markers:
+            return None, response_text
+
+        raw = response_text.strip()
+        fence_match = re.search(r"```(?:ya?ml|json)?\s*(platform:[\s\S]*?)```", raw, re.IGNORECASE)
+        if fence_match:
+            raw = fence_match.group(1).strip()
+
+        platform = plat_match.group(1).lower()
+        if platform == "x":
+            platform = "twitter"
+
+        def _extract_scalar(key: str) -> Optional[str]:
+            m = re.search(rf"(?:^|\n)\s*(?:-\s*)?{key}:\s*(?:[\"']([^\n]*)[\"']|([^\n]+))", raw, re.IGNORECASE)
+            if m:
+                val = (m.group(1) if m.group(1) is not None else m.group(2)).strip()
+                return val.strip("\"'").strip()
+            return None
+
+        format_val = (_extract_scalar("format") or ("thread" if platform == "twitter" else "post")).lower()
+        hook_val = _extract_scalar("hook")
+        status_val = _extract_scalar("status") or "Draft"
+        media_suggestion = _extract_scalar("media_suggestion")
+
+        # Parse hashtags
+        hashtags = []
+        hash_match = re.search(r"(?:^|\n)\s*(?:-\s*)?hashtags:\s*(\[[^\]]*\]|[^\n]+)", raw, re.IGNORECASE)
+        if hash_match:
+            raw_hashes = hash_match.group(1).strip()
+            if raw_hashes.startswith("[") and raw_hashes.endswith("]"):
+                try:
+                    hashtags = json.loads(raw_hashes.replace("'", '"'))
+                except Exception:
+                    hashtags = [h.strip().strip("'\"") for h in raw_hashes[1:-1].split(",") if h.strip()]
+            else:
+                hashtags = [h for h in re.split(r"[\s,]+", raw_hashes) if h.startswith("#")]
+
+        # Parse source references
+        source_refs = []
+        ref_match = re.search(r"(?:^|\n)\s*(?:-\s*)?source_references:\s*(\[[^\]]*\]|[^\n]+)", raw, re.IGNORECASE)
+        if ref_match:
+            raw_refs = ref_match.group(1).strip()
+            if raw_refs.startswith("[") and raw_refs.endswith("]"):
+                try:
+                    source_refs = json.loads(raw_refs.replace("'", '"'))
+                except Exception:
+                    source_refs = [r.strip().strip("'\"") for r in raw_refs[1:-1].split(",") if r.strip()]
+            else:
+                source_refs = [raw_refs]
+
+        # Parse warnings
+        warnings = []
+        warn_match = re.search(r"(?:^|\n)\s*(?:-\s*)?warnings:\s*(\[[^\]]*\]|[^\n]+)", raw, re.IGNORECASE)
+        if warn_match:
+            raw_warn = warn_match.group(1).strip()
+            if raw_warn.startswith("[") and raw_warn.endswith("]"):
+                try:
+                    warnings = json.loads(raw_warn.replace("'", '"'))
+                except Exception:
+                    pass
+
+        # Extract content body
+        content_val = ""
+        content_match = re.search(r"(?:^|\n)\s*(?:-\s*)?content:\s*([\s\S]*)$", raw, re.IGNORECASE)
+        if content_match:
+            content_val = content_match.group(1).strip()
+        else:
+            content_val = re.sub(
+                r"(?:^|\n)\s*(?:-\s*)?(?:platform|format|hook|hashtags|source_references|warnings|media_suggestion|status):\s*[^\n]*",
+                "",
+                raw,
+                flags=re.IGNORECASE,
+            ).strip()
+
+        # Handle Twitter thread items
+        tweets = []
+        if platform == "twitter":
+            thread_parts = re.split(r"\n\s*---\s*\n|\n\s*---\s*$", content_val)
+            if len(thread_parts) > 1:
+                tweets = [
+                    {"tweet_number": i + 1, "text": t.strip(), "char_count": len(t.strip())}
+                    for i, t in enumerate(thread_parts)
+                    if t.strip()
+                ]
+            else:
+                tweet_splits = re.split(r"(?:^|\n)(?:🧵\s*)?(\d+)\s*/\s*(?:\d+|\{total\}|N)?[:\s-]", content_val)
+                if len(tweet_splits) > 2:
+                    current_tweets = []
+                    for i in range(1, len(tweet_splits), 2):
+                        num = int(tweet_splits[i])
+                        txt = tweet_splits[i + 1].strip()
+                        current_tweets.append({"tweet_number": num, "text": txt, "char_count": len(txt)})
+                    if current_tweets:
+                        tweets = current_tweets
+            if not tweets and content_val:
+                tweets = [{"tweet_number": 1, "text": content_val, "char_count": len(content_val)}]
+
+        # Handle Instagram slides
+        slides = []
+        if platform == "instagram" or format_val == "carousel":
+            slide_matches = list(re.finditer(r"(?:^|\n)(?:###?\s*)?Slide\s*(\d+)[:\s-]*([^\n]*)([\s\S]*?)(?=(?:(?:^|\n)(?:###?\s*)?Slide\s*\d+)|\s*$)", content_val, re.IGNORECASE))
+            if slide_matches:
+                breakdown_idx = re.search(r"(?:Carousel\s+Slides\s+Breakdown|Slide\s*1[:\s-])", content_val, re.IGNORECASE)
+                if breakdown_idx and breakdown_idx.start() > 0:
+                    caption_only = content_val[:breakdown_idx.start()].strip()
+                    if caption_only:
+                        content_val = caption_only
+
+                for sm in slide_matches:
+                    num = int(sm.group(1))
+                    header = sm.group(2).strip()
+                    body_blk = sm.group(3).strip()
+
+                    h_match = re.search(r"(?:•\s*)?Headline:\s*([^\n]+)", body_blk, re.IGNORECASE)
+                    headline = h_match.group(1).strip() if h_match else (header or f"Slide {num}")
+
+                    sub_match = re.search(r"(?:•\s*)?Subheadline:\s*([^\n]+)", body_blk, re.IGNORECASE)
+                    subheadline = sub_match.group(1).strip() if sub_match else None
+
+                    b_match = re.search(r"(?:•\s*)?Body:\s*([\s\S]*?)(?=(?:•\s*Visual|\n\s*•|\n\s*Slide|$))", body_blk, re.IGNORECASE)
+                    slide_body = b_match.group(1).strip() if b_match else None
+
+                    v_match = re.search(r"(?:•\s*)?Visual(?:\s*Prompt)?:\s*([^\n]+)", body_blk, re.IGNORECASE)
+                    visual = v_match.group(1).strip() if v_match else None
+
+                    s_type = "insight"
+                    lower_comb = f"{header} {headline}".lower()
+                    if "cover" in lower_comb or num == 1:
+                        s_type = "cover"
+                    elif any(k in lower_comb for k in ("cta", "save", "follow")):
+                        s_type = "cta"
+                    elif any(k in lower_comb for k in ("data", "number")):
+                        s_type = "data"
+
+                    slides.append({
+                        "slide_number": num,
+                        "type": s_type,
+                        "headline": headline,
+                        "subheadline": subheadline,
+                        "body": slide_body,
+                        "visual_prompt": visual,
+                    })
+
+        # Structured draft payload
+        structured_draft = {
+            "platform": platform,
+            "format": format_val,
+            "hook": hook_val,
+            "content": content_val,
+            "hashtags": hashtags,
+            "source_references": source_refs,
+            "warnings": warnings,
+            "media_suggestion": media_suggestion,
+            "status": status_val,
+            "items": tweets if tweets else (slides if slides else None),
+            "tweets": [t["text"] for t in tweets] if tweets else None,
+            "slides": slides if slides else None,
+            "total_slides": len(slides) if slides else None,
+        }
+
+        # Extract preamble if any (text before platform:)
+        plat_idx = response_text.lower().find("platform:")
+        clean_content = ""
+        if plat_idx > 0:
+            clean_content = response_text[:plat_idx].strip()
+
+        return self._persist_social_draft_artifact(
+            structured_draft=structured_draft,
+            platform=platform,
+            format_val=format_val,
+            hook_val=hook_val,
+            content_val=content_val,
+            tweets=tweets,
+            slides=slides,
+            hashtags=hashtags,
+            source_refs=source_refs,
+            warnings=warnings,
+            media_suggestion=media_suggestion,
+            project_id=project_id,
+            clean_content=clean_content,
         )
 
     async def execute_turn(
@@ -516,19 +1027,33 @@ class LimoAgentRuntime:
                 response_text = decision.response_text or "I have processed your request."
                 execution_summary = decision.execution_summary or "Fast conversational response (zero tool schema overhead)."
 
+                # Detect and register first-class social media draft artifact if applicable
+                social_art, clean_text = self._detect_and_register_social_draft(
+                    response_text=response_text,
+                    session_id=session_id,
+                    project_id=project_id,
+                )
+                if social_art:
+                    art_ids = [social_art.id]
+                    content_to_persist = clean_text
+                    execution_summary = f"Generated {social_art.title} deliverable."
+                else:
+                    art_ids = []
+                    content_to_persist = response_text
+
                 # Append Source Citations Strip if web sources were retrieved
                 if context.unified_input and context.unified_input.web_sources:
                     citations = []
                     for s in context.unified_input.web_sources[:5]:
                         prov_info = f" ({s.scrape_provider})" if s.scrape_provider else ""
                         citations.append(f"• [{s.title}]({s.url}) — {s.domain}{prov_info}")
-                    response_text += "\n\n---\n**Sources:**\n" + "\n".join(citations)
+                    content_to_persist += ("\n\n" if content_to_persist else "") + "---\n**Sources:**\n" + "\n".join(citations)
 
                 assistant_msg = self.chat_svc.add_assistant_message(
                     session_id=session_id,
-                    content=response_text,
+                    content=content_to_persist,
                     mode=mode or FeatureMode.NONE,
-                    artifact_ids=[],
+                    artifact_ids=art_ids,
                     execution_summary=execution_summary,
                 )
                 return assistant_msg
@@ -557,6 +1082,14 @@ class LimoAgentRuntime:
                     TargetFormat.INFOGRAPHIC: OutputFormat.INFOGRAPHIC,
                 }
                 out_fmt = format_mapping.get(resolution.target_format, OutputFormat.DOCUMENT)
+
+                # Strict Mode Isolation: Audio mode NEVER produces Video, Video mode NEVER produces Audio
+                if norm_mode == "audio" and out_fmt == OutputFormat.VIDEO:
+                    out_fmt = OutputFormat.AUDIO
+                    resolution.target_format = TargetFormat.AUDIO
+                elif norm_mode == "video" and out_fmt == OutputFormat.AUDIO:
+                    out_fmt = OutputFormat.VIDEO
+                    resolution.target_format = TargetFormat.VIDEO
 
                 # Derive clean human title (grounded in canonical title if available)
                 grounded_canonical_title = None
@@ -767,7 +1300,7 @@ class LimoAgentRuntime:
                     return assistant_msg
 
                 # Branch 3c: Video Deliverables (D8.2 OpenMontage Video Engine via D6)
-                elif route.engine_type == EngineType.VIDEO_ENGINE or out_fmt == OutputFormat.VIDEO:
+                elif (route.engine_type == EngineType.VIDEO_ENGINE or out_fmt == OutputFormat.VIDEO) and norm_mode != "audio":
                     # 1. Parse duration if requested in prompt (e.g. "30-second", "15 seconds", "45s")
                     dur_match = re.search(r"\b(\d+)\s*(?:-|secs?|seconds?)\b", user_prompt.lower())
                     target_dur = 30.0
@@ -884,7 +1417,7 @@ class LimoAgentRuntime:
                     return assistant_msg
 
                 # Branch 3d: Standalone Audio Deliverables (Phase D8.3 TTS Service)
-                elif route.engine_type == EngineType.TTS_ENGINE or out_fmt == OutputFormat.AUDIO or resolution.target_format == TargetFormat.AUDIO:
+                elif (route.engine_type == EngineType.TTS_ENGINE or out_fmt == OutputFormat.AUDIO or resolution.target_format == TargetFormat.AUDIO) and norm_mode != "video":
                     selected_provider = voice_config.get("provider") if voice_config else None
                     selected_voice = (voice_config.get("voice_id") or voice_config.get("voice")) if voice_config else None
                     speed_val = float(voice_config.get("speed", 1.0)) if voice_config else 1.0
@@ -1038,11 +1571,7 @@ class LimoAgentRuntime:
                         raise RuntimeError(f"Infographic generation failed for '{planned_deliv.title}' on EC2 Prismo engine.")
 
                     summary = f"Generated {aspect_ratio} infographic poster '{artifact.title}.png' via D6 and Prismo design engine."
-                    content = (
-                        f"I have created your infographic: **{artifact.title}{artifact.file_format}** ({aspect_ratio}).\n\n"
-                        f"The design was composed using Prismo with balanced typography, visual structure, and verified PNG export.\n\n"
-                        f"You can view the deliverable card below and download `{artifact.title}{artifact.file_format}` directly."
-                    )
+                    content = ""
 
                     assistant_msg = self.chat_svc.add_assistant_message(
                         session_id=session_id,
@@ -1079,11 +1608,23 @@ class LimoAgentRuntime:
             available_tools=active_tools,
         )
 
+        social_art, clean_text = self._detect_and_register_social_draft(
+            response_text=loop_result.response_text,
+            session_id=session_id,
+            project_id=project_id,
+        )
+        if social_art:
+            art_ids = list(set((loop_result.artifact_ids or []) + [social_art.id]))
+            content_to_persist = clean_text
+        else:
+            art_ids = loop_result.artifact_ids
+            content_to_persist = loop_result.response_text
+
         assistant_msg = self.chat_svc.add_assistant_message(
             session_id=session_id,
-            content=loop_result.response_text,
+            content=content_to_persist,
             mode=context.active_mode,
-            artifact_ids=loop_result.artifact_ids,
+            artifact_ids=art_ids,
             execution_summary=loop_result.execution_summary,
         )
 

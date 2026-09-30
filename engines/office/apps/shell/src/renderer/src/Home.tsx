@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
-import logoLockup from './assets/genoffice-logo.svg'
 import iconDocx from './assets/file-docx.svg'
 import iconXlsx from './assets/file-xlsx.svg'
 import iconPptx from './assets/file-pptx.svg'
@@ -16,7 +15,7 @@ import type {
   ProjectSummaryEntry,
   RecentEntry,
 } from '../../shared/home-api'
-import { useDismissablePopover } from '@genoffice/ui'
+import { useDismissablePopover, LimoMascot } from '@genoffice/ui'
 import { fileCountKey, visiblePageCount } from './counts'
 import { useI18n } from './locale'
 import type { I18n, StringKey } from './locale'
@@ -1127,7 +1126,12 @@ function DropToOpenOverlay(): ReactElement | null {
 
 // ── Main component ──────────────────────────────────────
 
-export function Home() {
+export interface HomeProps {
+  onSwitchToLimo?: () => void
+  currentView?: 'limo' | 'office'
+}
+
+export function Home({ onSwitchToLimo, currentView = 'office' }: HomeProps = {}) {
   const i18n = useI18n()
   const { t, lang } = i18n
   // ── Paged list state (rows loaded for the current view + filter) ──
@@ -1138,8 +1142,6 @@ export function Home() {
   const [navCounts, setNavCounts] = useState({ recent: 0, starred: 0 })
   const [loadingMore, setLoadingMore] = useState(false)
   const [view, setView] = useState<'recent' | 'starred'>('recent')
-  // Genspark web projects take over the content area (like a selected project)
-  const [cloudMode, setCloudMode] = useState(false)
   const [filter, setFilter] = useState('all')
   // modified-column sort (WPS-style header popover), shared by the global and project tables
   const [fileSort, setFileSort] = useState<'recent' | 'oldest'>('recent')
@@ -1155,14 +1157,12 @@ export function Home() {
   const [confirmMissing, setConfirmMissing] = useState<RecentEntry | null>(null)
   // name in the greeting; omitted when logged out
   const [accountName, setAccountName] = useState('')
-  // Genspark Projects is web-account data, so its nav entry only shows when logged in
   const [loggedIn, setLoggedIn] = useState(false)
   // single source of account state: AccountEntry reports every change (initial
-  // load, login, logout), keeping the greeting name and the nav entry in sync
+  // load, login, logout), keeping the greeting name in sync
   const handleAccountStatus = useCallback((s: AccountStatus | null) => {
     const on = s?.loggedIn ?? false
     setLoggedIn(on)
-    if (!on) setCloudMode(false)
     const name = on ? (s?.email ?? '').split('@')[0] : ''
     setAccountName(name ? name[0].toUpperCase() + name.slice(1) : '')
   }, [])
@@ -1173,6 +1173,20 @@ export function Home() {
   // ── Project state ──
   const [projects, setProjects] = useState<ProjectSummaryEntry[]>([])
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
+  const [activeToggle, setActiveToggle] = useState<'limo' | 'office'>(currentView)
+
+  useEffect(() => {
+    setActiveToggle(currentView)
+  }, [currentView])
+
+  const handleSwitchToLimo = () => {
+    setActiveToggle('limo')
+    onSwitchToLimo?.()
+  }
+
+  const handleSwitchToOffice = () => {
+    setActiveToggle('office')
+  }
 
   const projectMode = hasProjectApi()
 
@@ -2114,115 +2128,124 @@ export function Home() {
   return (
     <div className="home">
       <aside className="sidebar">
-        <div className="sidebar-logo">
-          <img className="logo-lockup" src={logoLockup} alt="GenOffice" />
+        <div className="sidebar-header">
+          <div className="brand-badge" onClick={() => onSwitchToLimo?.()} title="Limo Conversational AI">
+            <div className="brand-logo-icon">
+              <LimoMascot size={28} interactive={true} />
+            </div>
+            <span className="brand-title">Limo</span>
+          </div>
+
+          <button
+            className="collapse-toggle-btn"
+            title="Collapse sidebar"
+            aria-label="Collapse sidebar"
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect width="18" height="18" x="3" y="3" rx="2" />
+              <path d="M9 3v18" />
+              <path d="m16 15-3-3 3-3" />
+            </svg>
+          </button>
         </div>
 
-        <nav className="sidebar-nav">
-          <button
-            className={`nav-item${view === 'recent' && !selectedProjectId && !cloudMode ? ' active' : ''}`}
-            onClick={() => {
-              changeView('recent')
-              setSelectedProjectId(null)
-              setCloudMode(false)
-            }}
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <circle cx="8" cy="8" r="6.2" stroke="currentColor" strokeWidth="1.3" />
-              <path
-                d="M8 4.8V8l2.2 1.6"
-                stroke="currentColor"
-                strokeWidth="1.3"
-                strokeLinecap="round"
-              />
-            </svg>
-            <span className="nav-label">{t('navRecent')}</span>
-            <span className="nav-count">{navCounts.recent}</span>
-          </button>
-          <button
-            className={`nav-item${view === 'starred' && !selectedProjectId && !cloudMode ? ' active' : ''}`}
-            onClick={() => {
-              changeView('starred')
-              setSelectedProjectId(null)
-              setCloudMode(false)
-            }}
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path
-                d="M8 1.9l1.9 3.85 4.25.62-3.07 3 .72 4.23L8 11.6l-3.8 2 .72-4.23-3.07-3 4.25-.62z"
-                stroke="currentColor"
-                strokeWidth="1.3"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <span className="nav-label">{t('navStarred')}</span>
-            <span className="nav-count">{navCounts.starred}</span>
-          </button>
-          {loggedIn && (
+        <div className="sidebar-switch-wrapper">
+          <div className="sidebar-view-toggle" role="tablist">
+            <div className={`sidebar-toggle-glider ${activeToggle}`} aria-hidden="true" />
             <button
-              className={`nav-item${cloudMode && !selectedProjectId ? ' active' : ''}`}
+              className={`sidebar-toggle-btn${activeToggle === 'limo' ? ' active' : ''}`}
+              onClick={handleSwitchToLimo}
+              title="Limo"
+              aria-label="Limo"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              <span>Limo</span>
+            </button>
+            <button
+              className={`sidebar-toggle-btn${activeToggle === 'office' ? ' active' : ''}`}
+              onClick={handleSwitchToOffice}
+              title="Office"
+              aria-label="Office"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="3" y="3" width="7" height="7" rx="1" />
+                <rect x="14" y="3" width="7" height="7" rx="1" />
+                <rect x="14" y="14" width="7" height="7" rx="1" />
+                <rect x="3" y="14" width="7" height="7" rx="1" />
+              </svg>
+              <span>Office</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="sidebar-scrollable-content">
+          <nav className="sidebar-nav">
+            <button
+              className={`nav-item${view === 'recent' && !selectedProjectId ? ' active' : ''}`}
               onClick={() => {
-                setCloudMode(true)
+                changeView('recent')
                 setSelectedProjectId(null)
-                setSelected(new Set())
-                setRowMenu(null)
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="8" cy="8" r="6.2" stroke="currentColor" strokeWidth="1.3" />
+                <path
+                  d="M8 4.8V8l2.2 1.6"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                />
+              </svg>
+              <span className="nav-label">{t('navRecent')}</span>
+              <span className="nav-count">{navCounts.recent}</span>
+            </button>
+            <button
+              className={`nav-item${view === 'starred' && !selectedProjectId ? ' active' : ''}`}
+              onClick={() => {
+                changeView('starred')
+                setSelectedProjectId(null)
               }}
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path
-                  d="M8 1.8l1.55 4.65L14.2 8l-4.65 1.55L8 14.2 6.45 9.55 1.8 8l4.65-1.55z"
+                  d="M8 1.9l1.9 3.85 4.25.62-3.07 3 .72 4.23L8 11.6l-3.8 2 .72-4.23-3.07-3 4.25-.62z"
                   stroke="currentColor"
                   strokeWidth="1.3"
                   strokeLinejoin="round"
                 />
               </svg>
-              <span className="nav-label">{t('navCloud')}</span>
-              <svg
-                className="nav-external"
-                width="13"
-                height="13"
-                viewBox="0 0 16 16"
-                fill="none"
-                aria-hidden="true"
-              >
-                <path
-                  d="M6.5 3.5H4a1.5 1.5 0 0 0-1.5 1.5v7A1.5 1.5 0 0 0 4 13.5h7A1.5 1.5 0 0 0 12.5 12V9.5M9.5 2.5h4v4M13 3l-5.5 5.5"
-                  stroke="currentColor"
-                  strokeWidth="1.3"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              <span className="nav-label">{t('navStarred')}</span>
+              <span className="nav-count">{navCounts.starred}</span>
             </button>
+          </nav>
+
+          {/* project sidebar */}
+          {projectMode && (
+            <>
+              <div className="sidebar-divider" />
+              <ProjectPanel
+                projects={projects}
+                selectedId={selectedProjectId}
+                onSelect={(id) => {
+                  setSelectedProjectId(id)
+                  setSelected(new Set())
+                  setRowMenu(null)
+                }}
+                onRefresh={refresh}
+              />
+            </>
           )}
-        </nav>
+        </div>
 
-        {/* project sidebar */}
-        {projectMode && (
-          <>
-            <div className="sidebar-divider" />
-            <ProjectPanel
-              projects={projects}
-              selectedId={selectedProjectId}
-              onSelect={(id) => {
-                setSelectedProjectId(id)
-                // reset list-selection state on any project switch (paths are
-                // shared between the plain view and project views)
-                setSelected(new Set())
-                setRowMenu(null)
-              }}
-              onRefresh={refresh}
-            />
-          </>
-        )}
-
-        <AccountEntry onStatusChange={handleAccountStatus} />
+        <div className="sidebar-footer-wrap">
+          <AccountEntry onStatusChange={handleAccountStatus} />
+        </div>
       </aside>
 
       {selectedProjectId ? (
         renderProjectContent()
-      ) : cloudMode ? (
-        <CloudProjectsView />
       ) : (
         renderGlobalContent()
       )}

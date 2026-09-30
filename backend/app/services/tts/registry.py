@@ -4,7 +4,13 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...config import settings
-from .adapters import AzureTTSAdapter, EdgeTTSAdapter, OpenAITTSAdapter, PiperTTSAdapter
+from .adapters import (
+    AzureTTSAdapter,
+    EdgeTTSAdapter,
+    GeminiTTSAdapter,
+    OpenAITTSAdapter,
+    PiperTTSAdapter,
+)
 from .base import BaseTTSProvider
 from .models import (
     InvalidVoiceError,
@@ -20,12 +26,20 @@ class TTSProviderRegistry:
 
     def __init__(self) -> None:
         self._providers: Dict[str, BaseTTSProvider] = {}
-        # Register primary providers
-        self.register_provider(AzureTTSAdapter())
-        self.register_provider(OpenAITTSAdapter())
-        self.register_provider(PiperTTSAdapter())
-        # Register fallback provider
+        # 1. Primary Cloud Provider (Google Gemini Pro Neural TTS)
+        self.register_provider(GeminiTTSAdapter())
+        # 2. Local Fallback Provider (Edge TTS zero-config neural fallback)
         self.register_provider(EdgeTTSAdapter())
+        # 3. Optional local binary provider
+        self.register_provider(PiperTTSAdapter())
+
+        # Conditionally register external providers ONLY if explicitly configured
+        azure_adapter = AzureTTSAdapter()
+        if azure_adapter.get_status():
+            self.register_provider(azure_adapter)
+        openai_adapter = OpenAITTSAdapter()
+        if openai_adapter.get_status():
+            self.register_provider(openai_adapter)
 
     def register_provider(self, provider: BaseTTSProvider) -> None:
         """Register a TTS provider adapter."""
@@ -48,8 +62,8 @@ class TTSProviderRegistry:
 
     def get_cached_catalog(self) -> List[Dict[str, Any]]:
         """Return cached voice catalog representation for fast API consumption."""
-        default_prov = (getattr(settings, "default_tts_provider", None) or "azure").lower()
-        default_vc = (getattr(settings, "default_tts_voice", None) or "en-US-AndrewMultilingualNeural").lower()
+        default_prov = (getattr(settings, "default_tts_provider", None) or "gemini").lower()
+        default_vc = (getattr(settings, "default_tts_voice", None) or "Aoede").lower()
 
         voices = self.list_all_voices()
         result = []
@@ -136,8 +150,8 @@ class TTSProviderRegistry:
                 )
 
         # Case 3: Neither provider nor voice specified -> Use configured defaults
-        default_prov_name = getattr(settings, "default_tts_provider", "azure").lower()
-        default_voice_name = getattr(settings, "default_tts_voice", "en-US-AndrewMultilingualNeural").lower()
+        default_prov_name = getattr(settings, "default_tts_provider", "gemini").lower()
+        default_voice_name = getattr(settings, "default_tts_voice", "Aoede").lower()
 
         default_adapter = self.get_provider(default_prov_name)
         if default_adapter and default_adapter.get_status():
@@ -163,7 +177,7 @@ class TTSProviderRegistry:
 
         raise TTSProviderUnavailableError(
             "No TTS provider is currently available on the system. "
-            "Please configure AZURE_SPEECH_KEY, OPENAI_API_KEY, install piper, or install edge-tts."
+            "Please configure GEMINI_KEY_1, install piper, or install edge-tts."
         )
 
 

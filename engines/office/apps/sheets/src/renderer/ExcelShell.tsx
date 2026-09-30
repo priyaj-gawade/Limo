@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { platformShortcuts } from '@genoffice/i18n'
 import {
   Dropdown,
+  LimoMascot,
   RibbonCollapseButton,
   SHAPE_GALLERY_GROUPS,
   ShapePreview,
@@ -19,7 +20,6 @@ import {
   BorderThickOuterIcon,
   BorderTopIcon,
   CaretIcon,
-  GensparkMark,
   RIBBON_GLYPH_ICONS,
   RedoIcon,
   SaveAsIcon,
@@ -2541,10 +2541,10 @@ function Ribbon({
           onClick={onAiToggle}
         >
           <span className="tool-icon-row">
-            <GensparkMark size={26} />
+            <LimoMascot size={26} interactive={true} />
           </span>
           <span>
-            <strong>Genspark AI</strong>
+            <strong>Limo AI</strong>
           </span>
         </button>
         <button

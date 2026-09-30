@@ -230,6 +230,9 @@ import { AutomationExecutionRunner } from './automation-runner'
 // run silently quits and forwards its argv to the running installed GenOffice.
 // GENOFFICE_USER_DATA: test drivers point this at a scratch dir so an
 // automated instance can run alongside the dev instance (separate lock).
+app.setName('Limo AI')
+app.name = 'Limo AI'
+
 if (!app.isPackaged)
   app.setPath(
     'userData',
@@ -271,14 +274,16 @@ const SIDECAR_BIN = app.isPackaged
   ? join(process.resourcesPath, 'native', SIDECAR_EXE)
   : join(APPS_ROOT, 'sheets', 'native', 'xlsx-engine', 'target', 'release', SIDECAR_EXE)
 
+const isDev = !app.isPackaged && Boolean(process.env.ELECTRON_RENDERER_URL)
+
 configureDocsRuntime({
   preloadPath: join(DOCS_OUT, 'preload', 'index.js'),
-  rendererUrl: process.env.DOCS_RENDERER_URL,
+  rendererUrl: process.env.DOCS_RENDERER_URL || (isDev ? 'http://localhost:5173' : undefined),
   rendererFile: join(DOCS_OUT, 'renderer', 'index.html'),
 })
 configureSheetsRuntime({
   preloadPath: join(SHEETS_OUT, 'preload', 'index.js'),
-  rendererUrl: process.env.SHEETS_RENDERER_URL,
+  rendererUrl: process.env.SHEETS_RENDERER_URL || (isDev ? 'http://localhost:5174' : undefined),
   rendererFile: join(SHEETS_OUT, 'renderer', 'index.html'),
   sidecarPath: SIDECAR_BIN,
   openGeneratedPath: (path) => openGeneratedDocument(path),
@@ -288,26 +293,26 @@ configureSheetsRuntime({
 })
 configureSlidesRuntime({
   preloadPath: join(SLIDES_OUT, 'preload', 'index.js'),
-  rendererDevUrl: process.env.SLIDES_RENDERER_URL,
+  rendererDevUrl: process.env.SLIDES_RENDERER_URL || (isDev ? 'http://localhost:5175' : undefined),
   rendererFilePath: join(SLIDES_OUT, 'renderer', 'index.html'),
   openGeneratedPath: (path) => openGeneratedDocument(path),
 })
 configurePdfRuntime({
   preloadPath: join(PDF_OUT, 'preload', 'index.js'),
-  rendererUrl: process.env.PDF_RENDERER_URL,
+  rendererUrl: process.env.PDF_RENDERER_URL || (isDev ? 'http://localhost:5176' : undefined),
   rendererFile: join(PDF_OUT, 'renderer', 'index.html'),
   openGeneratedPath: (path) => openGeneratedDocument(path),
   createDocument: createAiDocument,
 })
 configureMarkdownRuntime({
   preloadPath: join(MARKDOWN_OUT, 'preload', 'index.js'),
-  rendererUrl: process.env.MARKDOWN_RENDERER_URL,
+  rendererUrl: process.env.MARKDOWN_RENDERER_URL || (isDev ? 'http://localhost:5177' : undefined),
   rendererFile: join(MARKDOWN_OUT, 'renderer', 'index.html'),
   openGeneratedPath: (path) => openGeneratedDocument(path),
 })
 configureHtmlRuntime({
   preloadPath: join(HTML_OUT, 'preload', 'index.js'),
-  rendererUrl: process.env.HTML_RENDERER_URL,
+  rendererUrl: process.env.HTML_RENDERER_URL || (isDev ? 'http://localhost:5178' : undefined),
   rendererFile: join(HTML_OUT, 'renderer', 'index.html'),
   openGeneratedPath: (path) => openGeneratedDocument(path),
 })
@@ -2331,12 +2336,18 @@ function applyMenuFor(kind: TabKind): void {
 }
 
 function createShellWindow(): void {
+  const iconPath = existsSync(join(__dirname, '../../build/icon.ico'))
+    ? join(__dirname, '../../build/icon.ico')
+    : existsSync(join(__dirname, '../../build/icon.png'))
+      ? join(__dirname, '../../build/icon.png')
+      : undefined
   const win = new BrowserWindow({
     width: 1360,
     height: 900,
     minWidth: 720,
     minHeight: 550,
-    title: 'GenOffice',
+    title: 'Limo AI',
+    ...(iconPath ? { icon: iconPath } : {}),
     // vibrancy: editor modules punch translucent regions (e.g. the slides
     // thumbnail pane) through to the desktop
     ...(process.platform === 'darwin'
@@ -2350,6 +2361,18 @@ function createShellWindow(): void {
     },
   })
   shellWindow = win
+  if (iconPath) {
+    win.setIcon(iconPath)
+  }
+  win.on('page-title-updated', (e) => {
+    e.preventDefault()
+    const active = tabManager?.list().find((t) => t.active)
+    if (active && active.title && active.id !== 'home') {
+      win.setTitle(`${active.title} — Limo AI`)
+    } else {
+      win.setTitle('Limo AI')
+    }
+  })
   // dragging the window by the tab strip's blank (draggable) area produces no
   // DOM event anywhere — will-move is the only signal to dismiss popovers
   win.on('will-move', () => broadcastChromePressed())
@@ -2359,7 +2382,15 @@ function createShellWindow(): void {
 
   const manager = new TabManager(
     win,
-    () => win.webContents.send(TABS_CHANNELS.changed, manager.list()),
+    () => {
+      win.webContents.send(TABS_CHANNELS.changed, manager.list())
+      const active = manager.list().find((t) => t.active)
+      if (active && active.title && active.id !== 'home') {
+        win.setTitle(`${active.title} — Limo AI`)
+      } else {
+        win.setTitle('Limo AI')
+      }
+    },
     applyMenuFor,
     // no extension: these tabs have no file on disk yet; the title becomes the
     // real filename (the localized untitled default + .docx etc.) once the first save lands
@@ -4257,6 +4288,9 @@ setSessionPathResolver(resolveSheetsSessionPath)
 
 /** Dev-only pid marker for the takeover below; scoped to userData like the lock itself. */
 const devPidFile = () => join(app.getPath('userData'), 'dev-instance.pid')
+
+app.setName('Limo AI')
+app.name = 'Limo AI'
 
 app.whenReady().then(async () => {
   const lockData = () => (pendingLaunchPath ? { launchPath: pendingLaunchPath } : {})

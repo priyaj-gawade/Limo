@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useAutoSavePref } from '@genoffice/ui'
+import { useAutoSavePref, LimoMascot } from '@genoffice/ui'
 import { EditorContent, useEditor } from '@tiptap/react'
 import { FindPanel, type FindFocusRequest, type FindPanelStrings } from '@genoffice/ui'
 import type { Editor } from '@tiptap/core'
@@ -23,7 +23,7 @@ import { ToastHost } from './components/toast'
 import { TableMenu } from './components/TableMenu'
 import { FrontmatterPanel } from './components/FrontmatterPanel'
 import { AiAskPopover } from './components/AiAskPopover'
-import { AiPanel, GensparkMark, type AiPreset, type MarkdownAiDeps } from './ai/AiPanel'
+import { AiPanel, type AiPreset, type MarkdownAiDeps } from './ai/AiPanel'
 import { EDIT_QUEUE_MAX, selectionForAnchor, type EditQueueItem } from './ai/edit-queue'
 import { addQueueAnchor, clearQueueAnchors, removeQueueAnchors } from './editor/aiQueueAnchors'
 import { DOCX_MAX_IMAGE_PX, exportDocxBytes } from './export/docxExport'
@@ -649,7 +649,7 @@ export default function App() {
               aria-label={t('aiOpenAssistant')}
               onClick={() => setAiOpen(true)}
             >
-              <GensparkMark size={22} />
+              <LimoMascot size={22} interactive={true} />
             </button>
           )}
           {/* mounted only after the file is loaded so chat history resolves against the real path */}

@@ -1,14 +1,13 @@
 /** Home tab of the slides ribbon. Extracted from Ribbon.tsx. */
 import { useState } from 'react'
 import { platformShortcuts } from '@genoffice/i18n'
-import { ColorPicker, isSymbolFontFamily } from '@genoffice/ui'
+import { ColorPicker, isSymbolFontFamily, LimoMascot } from '@genoffice/ui'
 import { saveEditSelection } from '../TextEditOverlay'
 import { armColorInput } from '../color-input'
 import { displayFontFamily } from '../konva-adapter'
 import { useSystemFontFamilies } from '../system-fonts'
 import { useFontCatalog } from '../font-manager'
 import {
-  GensparkMark,
   IconAiBeautify,
   IconAiFactCheck,
   IconAiImage,
@@ -184,16 +183,16 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
   }
   return (
     <>
-      <Group label="Genspark AI">
+      <Group label="Limo AI">
         <button
           className={`rb-big ai-entry${aiOpen ? ' active' : ''}`}
           data-tip={t('aiOpenAssistant')}
           onClick={onToggleAi}
         >
           <span className="rb-big-icon">
-            <GensparkMark size={26} />
+            <LimoMascot size={26} interactive={true} />
           </span>
-          <span>Genspark AI</span>
+          <span>Limo AI</span>
         </button>
         <button
           className="rb-big ai-entry"

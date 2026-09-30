@@ -18,7 +18,7 @@ from .base import BaseNativeAdapter, GeneratedContent, make_slug
 
 
 class NativeSocialAdapter(BaseNativeAdapter):
-    """Deterministic native adapter for professional LinkedIn and X/Twitter content."""
+    """Deterministic native adapter for professional LinkedIn, X/Twitter, and Instagram content."""
 
     def synthesize(
         self,
@@ -28,6 +28,8 @@ class NativeSocialAdapter(BaseNativeAdapter):
     ) -> GeneratedContent:
         if deliverable.format == OutputFormat.TWITTER:
             return self._synthesize_twitter(canonical, deliverable, config)
+        elif deliverable.format == OutputFormat.INSTAGRAM:
+            return self._synthesize_instagram(canonical, deliverable, config)
         return self._synthesize_linkedin(canonical, deliverable, config)
 
     def _synthesize_linkedin(
@@ -85,7 +87,20 @@ class NativeSocialAdapter(BaseNativeAdapter):
         filename = f"{clean_slug}_linkedin.md"
 
         word_count = len(content_str.split())
-        stats = f"{word_count} words • LinkedIn Post (.md)"
+        stats = f"{word_count} words • LinkedIn Post • Draft"
+
+        # Structured draft object
+        structured_draft = {
+            "platform": "linkedin",
+            "format": "post",
+            "hook": hook,
+            "content": content_str,
+            "hashtags": hashtags[:5],
+            "source_references": [f.source_reference for f in canonical.facts if f.source_reference],
+            "warnings": [],
+            "media_suggestion": "Single high-contrast infographic chart or executive portrait",
+            "status": "Draft",
+        }
 
         return GeneratedContent(
             content_bytes=content_bytes,
@@ -93,7 +108,17 @@ class NativeSocialAdapter(BaseNativeAdapter):
             file_format=".md",
             artifact_type=ArtifactType.POST,
             stats=stats,
-            metadata={"platform": "linkedin", "hashtags": hashtags[:5], "word_count": word_count},
+            metadata={
+                "platform": "linkedin",
+                "format": "post",
+                "status": "Draft",
+                "hook": hook,
+                "hashtags": hashtags[:5],
+                "word_count": word_count,
+                "social_draft": structured_draft,
+                "engine": "social",
+                "skill": "linkedin",
+            },
         )
 
     def _synthesize_twitter(
@@ -154,11 +179,25 @@ class NativeSocialAdapter(BaseNativeAdapter):
             total_tweets=total_tweets,
         )
 
+        # Structured draft object
+        structured_draft = {
+            "platform": "twitter",
+            "format": "thread",
+            "hook": tweet_items[0].text if tweet_items else "",
+            "content": "\n\n---\n\n".join(t.text for t in tweet_items),
+            "items": [t.model_dump() for t in tweet_items],
+            "total_tweets": total_tweets,
+            "hashtags": [],
+            "source_references": [f.source_reference for f in canonical.facts if f.source_reference],
+            "warnings": [],
+            "status": "Draft",
+        }
+
         content_bytes = thread_payload.model_dump_json(indent=2).encode("utf-8")
         clean_slug = make_slug(deliverable.title, fallback="twitter_thread")
         filename = f"{clean_slug}_thread.json"
 
-        stats = f"{total_tweets} Tweets • X/Twitter Thread (.json)"
+        stats = f"{total_tweets} Tweets • X/Twitter Thread • Draft"
 
         return GeneratedContent(
             content_bytes=content_bytes,
@@ -166,5 +205,126 @@ class NativeSocialAdapter(BaseNativeAdapter):
             file_format=".json",
             artifact_type=ArtifactType.POST,
             stats=stats,
-            metadata={"platform": "twitter", "total_tweets": total_tweets, "max_char_count": max(t.char_count for t in tweet_items)},
+            metadata={
+                "platform": "twitter",
+                "format": "thread",
+                "status": "Draft",
+                "total_tweets": total_tweets,
+                "hook": tweet_items[0].text if tweet_items else "",
+                "max_char_count": max(t.char_count for t in tweet_items) if tweet_items else 0,
+                "social_draft": structured_draft,
+                "engine": "social",
+                "skill": "twitter",
+            },
+        )
+
+    def _synthesize_instagram(
+        self,
+        canonical: CanonicalContent,
+        deliverable: PlannedDeliverable,
+        config: GenerationConfig,
+    ) -> GeneratedContent:
+        # 1. Catchy Visual Hook
+        hook = f"✨ {deliverable.title}: The 3-minute breakdown."
+
+        # 2. Carousel Slide Outlines
+        slides: List[Dict[str, Any]] = []
+        slides.append({
+            "slide_number": 1,
+            "type": "cover",
+            "headline": deliverable.title,
+            "subheadline": canonical.intent.core_narrative[:100],
+            "visual_prompt": "Bold high-contrast title card on dark background",
+        })
+
+        for idx, fact in enumerate(canonical.facts[:4], 2):
+            slides.append({
+                "slide_number": idx,
+                "type": "insight",
+                "headline": f"Insight #{idx - 1}",
+                "body": fact.statement,
+                "visual_prompt": "Clean minimalist infographic layout with emphasis on key statistic",
+            })
+
+        if canonical.data_points:
+            metrics_str = ", ".join(f"{dp.metric}: {dp.value}" for dp in canonical.data_points[:2])
+            slides.append({
+                "slide_number": len(slides) + 1,
+                "type": "data",
+                "headline": "By The Numbers",
+                "body": metrics_str,
+                "visual_prompt": "Data callout card with large typography and clean icon",
+            })
+
+        slides.append({
+            "slide_number": len(slides) + 1,
+            "type": "cta",
+            "headline": "Save this for later",
+            "body": "Follow for daily high-signal research breakdowns. Share with someone who needs this.",
+            "visual_prompt": "Save/Bookmark prompt with clean aesthetic branding",
+        })
+
+        # 3. Instagram Caption
+        caption_lines: List[str] = [
+            hook,
+            "",
+            canonical.intent.core_narrative,
+            "",
+            "SWIPE ➡️ for the complete breakdown.",
+            "",
+            "Key Highlights:",
+        ]
+        for fact in canonical.facts[:3]:
+            caption_lines.append(f"• {fact.statement}")
+        caption_lines.append("")
+        caption_lines.append("Drop your thoughts in the comments below! 👇")
+        caption_lines.append("")
+
+        # 4. Context-aware Hashtags
+        hashtags = ["#infographic", "#research", "#learning", "#insights", "#data"]
+        for ent in canonical.entities[:3]:
+            clean_tag = "#" + re.sub(r"[^a-zA-Z0-9]", "", ent.name.lower())
+            if len(clean_tag) > 2 and clean_tag not in hashtags:
+                hashtags.append(clean_tag)
+        caption_lines.append(" ".join(hashtags[:7]))
+
+        caption_str = "\n".join(caption_lines)
+
+        structured_draft = {
+            "platform": "instagram",
+            "format": "carousel",
+            "hook": hook,
+            "content": caption_str,
+            "slides": slides,
+            "total_slides": len(slides),
+            "hashtags": hashtags[:7],
+            "source_references": [f.source_reference for f in canonical.facts if f.source_reference],
+            "media_suggestion": "Carousel 4:5 portrait (1080x1350px) or Reel 9:16 (1080x1920px)",
+            "warnings": [],
+            "status": "Draft",
+        }
+
+        content_bytes = json.dumps(structured_draft, indent=2).encode("utf-8")
+        clean_slug = make_slug(deliverable.title, fallback="instagram_carousel")
+        filename = f"{clean_slug}_instagram.json"
+
+        stats = f"{len(slides)} Slides • Instagram Carousel • Draft"
+
+        return GeneratedContent(
+            content_bytes=content_bytes,
+            filename=filename,
+            file_format=".json",
+            artifact_type=ArtifactType.POST,
+            stats=stats,
+            metadata={
+                "platform": "instagram",
+                "format": "carousel",
+                "status": "Draft",
+                "total_slides": len(slides),
+                "hook": hook,
+                "hashtags": hashtags[:7],
+                "social_draft": structured_draft,
+                "engine": "social",
+                "skill": "instagram",
+            },
         )

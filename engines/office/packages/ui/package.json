@@ -33,7 +33,9 @@
     "vitest": "^4.1.11"
   },
   "dependencies": {
+    "@blobatar/react": "^2.7.0",
     "@genoffice/i18n": "*",
-    "@genoffice/pptx-render": "*"
+    "@genoffice/pptx-render": "*",
+    "blobatar": "^2.7.0"
   }
 }

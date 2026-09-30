@@ -78,6 +78,9 @@ def safe_init_env() -> None:
             os.environ["PIXABAY_API_KEY"] = pixabay_key
 
 
+safe_init_env()
+
+
 # Stage tracking
 @dataclass
 class StageRecord:
@@ -117,8 +120,8 @@ class StageTracker:
 # Contract validation models
 @dataclass
 class VoiceConfig:
-    provider: str = "edge_tts"
-    voice_id: str = "en-US-AndrewMultilingualNeural"
+    provider: str = "gemini"
+    voice_id: str = "Aoede"
     speed: float = 1.0
     pitch: float = 0.0
 
@@ -206,8 +209,8 @@ def validate_contract_dict(raw: Dict[str, Any]) -> VideoGenerationContract:
     if not isinstance(vc_raw, dict):
         vc_raw = {}
     voice_config = VoiceConfig(
-        provider=str(vc_raw.get("provider") or "edge_tts").strip(),
-        voice_id=str(vc_raw.get("voice_id") or vc_raw.get("voice") or "en-US-AndrewMultilingualNeural").strip(),
+        provider=str(vc_raw.get("provider") or "gemini").strip(),
+        voice_id=str(vc_raw.get("voice_id") or vc_raw.get("voice") or "Aoede").strip(),
         speed=float(vc_raw.get("speed", 1.0)),
         pitch=float(vc_raw.get("pitch", 0.0)),
     )
@@ -419,6 +422,7 @@ class LimoRunner:
             raise RuntimeError("No GEMINI API keys found in environment for script/scene planning.")
 
         from google import genai
+        from google.genai import types
 
         prompt = f"""You are an expert video director. Plan an engaging, educational video script and visual plan for:
 Topic: "{topic}"
@@ -454,14 +458,15 @@ Output MUST be a JSON object with:
   "scenes": [ ... ]
 }}
 """
-        candidate_models = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.6-flash"]
+        candidate_models = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite"]
         resp = None
         last_error = None
+        no_retry_opts = types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=0))
 
         for model in candidate_models:
             for key in available_keys:
                 try:
-                    client = genai.Client(api_key=key)
+                    client = genai.Client(api_key=key, http_options=no_retry_opts)
                     resp = client.models.generate_content(
                         model=model,
                         contents=prompt,
@@ -624,7 +629,7 @@ Output MUST be a JSON object with:
                 scene_audio_path = self.audio_dir / f"narration_scene_{scene.scene_index}.mp3"
                 tts_inputs: Dict[str, Any] = {
                     "text": scene.narration_text,
-                    "preferred_provider": self.contract.voice_config.provider or "edge_tts",
+                    "preferred_provider": self.contract.voice_config.provider or "gemini",
                     "voice": self.contract.voice_config.voice_id,
                     "voice_id": self.contract.voice_config.voice_id,
                     "pitch": self.contract.voice_config.pitch,

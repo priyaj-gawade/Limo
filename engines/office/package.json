@@ -1,5 +1,6 @@
 {
-  "name": "genoffice",
+  "name": "limo-office",
+  "productName": "Limo Office",
   "version": "0.1.0",
   "private": true,
   "description": "AI-native office suite (docs, sheets, slides, pdf, markdown, html)",
@@ -40,6 +41,8 @@
     "dist:linux": "npm run notices && npm run build:all && npm run dist:linux -w @genoffice/shell"
   },
   "dependencies": {
+    "@blobatar/react": "^2.7.0",
+    "blobatar": "^2.7.0",
     "ws": "^8.21.1"
   },
   "overrides": {
