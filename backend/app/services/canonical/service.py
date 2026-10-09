@@ -480,21 +480,30 @@ class CanonicalService:
         return self.build_fast_canonical(norm_doc)
 
     def get_canonical_by_source_id(self, source_id: str) -> Optional[CanonicalContent]:
-        """Retrieve CanonicalContent associated with a given Source ID."""
-        with get_connection(self.db_path) as conn:
-            # Query canonical_contents where source_ids_json contains source_id
-            sql = """
-                SELECT id FROM canonical_contents
-                WHERE id IN (
-                    SELECT json_extract(metadata_json, '$.canonical_id')
-                    FROM sources
-                    WHERE id = ?
+        """Retrieve CanonicalContent associated with a given Source ID across SQLite and PostgreSQL."""
+        try:
+            with get_connection(self.db_path) as conn:
+                is_pg = getattr(conn, "is_postgres", False)
+                json_expr = (
+                    "metadata_json::jsonb ->> 'canonical_id'"
+                    if is_pg
+                    else "json_extract(metadata_json, '$.canonical_id')"
                 )
-                LIMIT 1
-            """
-            row = conn.execute(sql, (source_id,)).fetchone()
-            if row:
-                return JobRepository.get_canonical_content(conn, row["id"])
+                sql = f"""
+                    SELECT id FROM canonical_contents
+                    WHERE id IN (
+                        SELECT {json_expr}
+                        FROM sources
+                        WHERE id = ?
+                    )
+                    LIMIT 1
+                """
+                row = conn.execute(sql, (source_id,)).fetchone()
+                if row:
+                    return JobRepository.get_canonical_content(conn, row["id"])
+                return None
+        except Exception as e:
+            logger.warning("Failed to query canonical content for source '%s': %s", source_id, e)
             return None
 
 

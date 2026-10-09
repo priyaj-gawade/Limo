@@ -164,7 +164,12 @@ class LimoAgentRuntime:
             from ..services.canonical.service import canonical_service
             from ..services.normalization.service import normalization_service
 
-            can = canonical_service.get_canonical_by_source_id(source.id)
+            can = None
+            try:
+                can = canonical_service.get_canonical_by_source_id(source.id)
+            except Exception as e:
+                logger.warning("Failed to lookup canonical by source ID '%s': %s", source.id, e)
+
             if not can and doc:
                 try:
                     norm_doc = normalization_service.normalize_extracted_document(doc)
@@ -730,6 +735,20 @@ class LimoAgentRuntime:
                 if att.source_id and att.source_id not in effective_source_ids:
                     effective_source_ids.append(att.source_id)
 
+        # Inherit sources from prior turns in the same chat session if current turn has none
+        if not effective_source_ids and session_id:
+            try:
+                prior_history = self.chat_svc.get_history(session_id)
+                for prior_m in reversed(prior_history):
+                    if prior_m.attachments:
+                        for att in prior_m.attachments:
+                            if att.source_id and att.source_id not in effective_source_ids:
+                                effective_source_ids.append(att.source_id)
+                    if len(effective_source_ids) >= 5:
+                        break
+            except Exception as e:
+                logger.debug("Source inheritance skipped for session %s: %s", session_id, e)
+
         # 1. Persist user turn with attachments
         user_msg = self.chat_svc.add_user_message(
             session_id=session_id,
@@ -1091,17 +1110,64 @@ class LimoAgentRuntime:
                     out_fmt = OutputFormat.VIDEO
                     resolution.target_format = TargetFormat.VIDEO
 
-                # Derive clean human title (grounded in canonical title if available)
+                # Retrieve conversational context from prior turns in this session for contextual grounding
+                prior_assistant_text = ""
+                prior_assistant_title = None
+                try:
+                    history = self.chat_svc.get_history(session_id)
+                    for m in reversed(history):
+                        m_role = getattr(m.role, "value", str(m.role)).lower()
+                        if m_role == "assistant" and m.content:
+                            prior_assistant_text = m.content
+                            # Check if the prior assistant message contains a heading or clear title
+                            h_match = re.search(r"(?:^|\n)(?:#+\s*|\*\*)([^\n*#]+)(?:\*\*|\n)", m.content)
+                            if h_match:
+                                cand_h = h_match.group(1).strip()
+                                if len(cand_h) > 3 and not cand_h.lower().startswith(("here is", "sure", "summary", "overview of")):
+                                    prior_assistant_title = cand_h
+                            if not prior_assistant_title:
+                                first_line = m.content.strip().split("\n")[0].lstrip("#*•- ").strip()
+                                if 3 < len(first_line) < 60 and not first_line.lower().startswith(("here is", "sure", "i have", "certainly")):
+                                    prior_assistant_title = first_line
+                            break
+
+                    # If assistant message didn't provide a clean title, inspect prior user turns for topic
+                    if not prior_assistant_title:
+                        for m in reversed(history):
+                            m_role = getattr(m.role, "value", str(m.role)).lower()
+                            if m_role == "user" and m.content and m.content.strip() != user_prompt.strip():
+                                user_clean = re.sub(
+                                    r"^(?:summarize|explain|tell\s+me\s+about|what\s+is|what\s+are|research\s+on|analyze)\s+",
+                                    "",
+                                    m.content,
+                                    flags=re.IGNORECASE,
+                                ).strip()
+                                if 3 < len(user_clean) < 60:
+                                    prior_assistant_title = user_clean
+                                    break
+                except Exception as e:
+                    logger.debug("History retrieval for contextual grounding skipped: %s", e)
+
+                # Derive clean human title (grounded in canonical title, prior turn, or prompt)
                 grounded_canonical_title = None
                 if context.unified_input and context.unified_input.canonical_contents:
                     grounded_canonical_title = context.unified_input.canonical_contents[0].title
                 elif context.unified_input and context.unified_input.sources and context.unified_input.sources[0].name:
                     grounded_canonical_title = re.sub(r"\.[^.]+$", "", context.unified_input.sources[0].name).replace("_", " ").title()
+                elif prior_assistant_title:
+                    grounded_canonical_title = prior_assistant_title
 
                 # Detect if prompt is a generic conversion directive without an explicit title
                 is_generic_directive = bool(re.match(
                     r"^(put|turn|convert|transform|make|create|generate|write)\s+(this|these|it|the attached|attached file|attachment)?\s*(into|in|to|as|from)?\s*(a\s+)?(one-page\s+|2-slide\s+|small\s+|short\s+|8-second\s+|15-second\s+|\d+:\d+\s+)?(markdown\s+|md\s+|docs?|documents?|presentations?|slides?|spreadsheets?|sheets?|tables?|pdfs?|videos?|memos?|explainer\s+video|infographics?|posters?|images?|flyers?)?\s*$",
                     user_prompt.strip(),
+                    flags=re.IGNORECASE,
+                ))
+
+                # Check if prompt references prior conversational context (e.g. "on this", "about it", "the article")
+                has_context_reference = bool(re.search(
+                    r"\b(this|these|it|the attached|attached|the article|the summary|the briefing|the topic|the research|the discussion)\b",
+                    user_prompt,
                     flags=re.IGNORECASE,
                 ))
 
@@ -1111,10 +1177,15 @@ class LimoAgentRuntime:
                     user_prompt,
                     flags=re.IGNORECASE,
                 ).strip()
+                # Clean prompt modifiers like "with key metrics", "with title X"
                 title_cand = re.sub(r"\s+with\s+a\s+title.*$", "", title_cand, flags=re.IGNORECASE).strip()
+                title_cand = re.sub(r"\s+with\s+(?:key\s+)?metrics.*$", "", title_cand, flags=re.IGNORECASE).strip()
+                title_cand = re.sub(r"^(?:document|markdown\s+document|slides|presentation)\s+(?:on|about|of|for)?\s*", "", title_cand, flags=re.IGNORECASE).strip()
                 title_cand = re.sub(r"[^\w\s-]", "", title_cand).strip().rstrip(".!?")
 
-                if is_generic_directive or resolution.target_url or not title_cand or len(title_cand) < 2 or title_cand.lower() in ("this", "these", "it", "the attached", "document", "slides", "presentation", "sheet", "spreadsheet", "video", "audio", "infographic", "poster", "image"):
+                if has_context_reference and grounded_canonical_title:
+                    title_cand = "_".join(w.capitalize() for w in grounded_canonical_title.split())[:45]
+                elif is_generic_directive or resolution.target_url or not title_cand or len(title_cand) < 2 or title_cand.lower() in ("this", "these", "it", "the attached", "document", "slides", "presentation", "sheet", "spreadsheet", "video", "audio", "infographic", "poster", "image"):
                     if grounded_canonical_title:
                         title_cand = "_".join(w.capitalize() for w in grounded_canonical_title.split())[:45]
                     elif not title_cand or len(title_cand) < 2:
@@ -1151,6 +1222,14 @@ class LimoAgentRuntime:
                                 f"You are Limo's Grounded Content Synthesis Engine.\n"
                                 f"The user requested a structured Markdown document with the following instruction:\n"
                                 f"\"{user_prompt}\"\n\n"
+                            )
+                            if prior_assistant_text:
+                                gen_prompt += (
+                                    f"Background Context / Article Facts from Conversation:\n"
+                                    f"\"\"\"\n{prior_assistant_text[:2500]}\n\"\"\"\n\n"
+                                    f"Ground the document strictly in the facts and metrics from the background context above.\n\n"
+                                )
+                            gen_prompt += (
                                 f"Generate a JSON object with:\n"
                                 f"- \"title\": string, document title (e.g. '{display_title}')\n"
                                 f"- \"primary_purpose\": string, document objective\n"
@@ -1262,11 +1341,20 @@ class LimoAgentRuntime:
                     else:
                         genoffice_prompt = f"Create a structured document on: {display_title}."
 
-                    # Ground in selective canonical slice if available
+                    # Ground in selective canonical slice if available or prior conversation facts
                     selected_ctx = ContextSelector.select(context.unified_input)
                     if selected_ctx.canonical_slice and selected_ctx.canonical_slice.get("facts"):
                         facts_hint = "; ".join(selected_ctx.canonical_slice["facts"][:3])
                         genoffice_prompt = f"{genoffice_prompt} Key points to incorporate: {facts_hint}"
+                    elif prior_assistant_text:
+                        key_points = [
+                            line.strip().lstrip("-*•0123456789. ")
+                            for line in prior_assistant_text.split("\n")
+                            if line.strip().startswith(("-", "*", "•")) or (len(line.strip()) > 35 and not line.strip().startswith("#"))
+                        ]
+                        if key_points:
+                            facts_hint = "; ".join(key_points[:3])
+                            genoffice_prompt = f"{genoffice_prompt} Key points from prior discussion: {facts_hint}"
 
                     logger.info(
                         "Executing native GenOffice deliverable generation for title='%s' (format=%s, prompt='%s')",
@@ -1325,11 +1413,16 @@ class LimoAgentRuntime:
                     logger.info("Executing video deliverable generation: raw='%s' -> clean_topic='%s' (target_dur=%.1fs)",
                                 display_title, clean_topic, target_dur)
 
-                    # 3. Check for article / content summarization requests
+                    # 3. Check for article / content summarization requests or prior turn facts
                     article_key_points = []
                     if "summariz" in user_prompt.lower() or len(user_prompt) > 150:
                         sentences = [s.strip() for s in re.split(r"[.\n]+", user_prompt) if len(s.strip()) > 20]
                         substantive = [s for s in sentences if not re.match(r"^(?:create|summarize|make|please|write)\b", s, re.IGNORECASE)]
+                        if substantive:
+                            article_key_points = substantive[:4]
+                    elif prior_assistant_text:
+                        sentences = [s.strip() for s in re.split(r"[.\n]+", prior_assistant_text) if len(s.strip()) > 25]
+                        substantive = [s for s in sentences if not s.startswith(("#", "*", "-", "Sure", "Here is", "I have"))]
                         if substantive:
                             article_key_points = substantive[:4]
 

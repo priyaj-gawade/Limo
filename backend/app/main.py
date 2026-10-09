@@ -41,8 +41,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     job_queue_manager.reconcile_on_startup()
     job_queue_manager.start_workers()
 
+    # Launch Supabase inactivity keepalive worker (~300 pings/day)
+    from .services.keepalive import keepalive_worker
+    keepalive_worker.start()
+
     yield
     logger.info("Shutting down %s", settings.app_name)
+    await keepalive_worker.stop()
     await job_queue_manager.stop_workers()
 
 

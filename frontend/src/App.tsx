@@ -401,6 +401,9 @@ export const App: React.FC = () => {
     if (!targetSessionId) return;
 
     setIsGenerating(true);
+    let shouldPoll = false;
+    let turnOk = false;
+
     try {
       const turnPayload = {
         content: text,
@@ -416,34 +419,82 @@ export const App: React.FC = () => {
         voice_config: voiceConfig || null,
       };
 
-      const turnRes = await fetch(`/api/v1/chats/${targetSessionId}/turn`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(turnPayload),
-      });
+      try {
+        const turnRes = await fetch(`/api/v1/chats/${targetSessionId}/turn`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(turnPayload),
+        });
 
-      if (turnRes.status === 401) {
-        setIsGenerating(false);
-        openLoginModal();
-        showToast('Session expired. Please sign in again.', 'error');
-        return;
+        if (turnRes.status === 401) {
+          setIsGenerating(false);
+          openLoginModal();
+          showToast('Session expired. Please sign in again.', 'error');
+          return;
+        }
+
+        if (turnRes.ok) {
+          turnOk = true;
+          await fetchMessages(targetSessionId);
+        } else if ([502, 503, 504].includes(turnRes.status) || activeMode === 'video') {
+          // Edge proxy timeout / heavy video rendering in background on backend
+          shouldPoll = true;
+        } else {
+          const errData = await turnRes.json().catch(() => ({}));
+          const errMsg: ChatMessage = {
+            id: `err-${Date.now()}`,
+            role: 'assistant',
+            content: `Error: ${errData.detail || errData.message || 'Agent reasoning failed.'}`,
+            createdAt: new Date().toISOString(),
+          };
+          setSessions((prev) =>
+            prev.map((s) =>
+              s.id === targetSessionId ? { ...s, messages: [...s.messages, errMsg] } : s
+            )
+          );
+        }
+      } catch (networkErr: any) {
+        // Edge connection dropped or network timeout (typical for 30s+ video generation on Vercel)
+        if (activeMode === 'video' || text.toLowerCase().includes('video') || networkErr?.name === 'AbortError' || String(networkErr).includes('fetch')) {
+          console.warn('Turn HTTP connection closed by proxy, entering active polling loop...', networkErr);
+          shouldPoll = true;
+        } else {
+          throw networkErr;
+        }
       }
 
-      if (turnRes.ok) {
-        await fetchMessages(targetSessionId);
-      } else {
-        const errData = await turnRes.json().catch(() => ({}));
-        const errMsg: ChatMessage = {
-          id: `err-${Date.now()}`,
-          role: 'assistant',
-          content: `Error: ${errData.detail || errData.message || 'Agent reasoning failed.'}`,
-          createdAt: new Date().toISOString(),
-        };
-        setSessions((prev) =>
-          prev.map((s) =>
-            s.id === targetSessionId ? { ...s, messages: [...s.messages, errMsg] } : s
-          )
-        );
+      // Resilient active polling loop for long-running video / heavy generation turns
+      if (shouldPoll && !turnOk) {
+        const startTime = Date.now();
+        const maxWaitMs = 120000; // 2 minutes max polling window
+        let completed = false;
+
+        while (Date.now() - startTime < maxWaitMs) {
+          await new Promise((resolve) => setTimeout(resolve, 4000));
+          const updatedMsgs = await fetchMessages(targetSessionId);
+          if (updatedMsgs && updatedMsgs.length > 0) {
+            const lastMsg = updatedMsgs[updatedMsgs.length - 1];
+            // If the latest message is now from the assistant (or has artifacts), turn has completed!
+            if (lastMsg.role === 'assistant') {
+              completed = true;
+              break;
+            }
+          }
+        }
+
+        if (!completed) {
+          const errMsg: ChatMessage = {
+            id: `err-${Date.now()}`,
+            role: 'assistant',
+            content: 'The generation is taking longer than expected. Please check back in a moment or refresh.',
+            createdAt: new Date().toISOString(),
+          };
+          setSessions((prev) =>
+            prev.map((s) =>
+              s.id === targetSessionId ? { ...s, messages: [...s.messages, errMsg] } : s
+            )
+          );
+        }
       }
     } catch (err) {
       console.error('Turn execution error:', err);
