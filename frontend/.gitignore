@@ -23,3 +23,8 @@ public/logos/
 *.njsproj
 *.sln
 *.sw?
+
+.vercel
+.env*
+
+supabase.exe

@@ -1,0 +1,14 @@
+# Vercel Ignore File
+backend/
+engines/
+data/
+scratch/
+docs/
+credentials/
+scripts/
+skills/
+*.py
+*.db
+*.pem
+*.yml
+*.ps1

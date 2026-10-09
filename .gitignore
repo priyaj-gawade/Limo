@@ -152,3 +152,8 @@ tmp/
 **/.system_generated/**
 .gemini/
 **/.gemini/**
+
+.vercel
+.env*
+
+supabase.exe
