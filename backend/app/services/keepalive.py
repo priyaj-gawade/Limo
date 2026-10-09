@@ -112,8 +112,8 @@ class SupabaseKeepaliveWorker:
     async def _loop(self) -> None:
         """Internal background loop running at target interval."""
         logger.info(
-            "[Keepalive] Starting Supabase keepalive loop: pacing ~%d requests/day (interval: %ds)",
-            TARGET_REQUESTS_PER_DAY,
+            "[Keepalive] Starting Supabase keepalive loop: pacing ~%d requests/week (interval: %ds)",
+            TARGET_REQUESTS_PER_WEEK,
             self.interval_seconds,
         )
         # Initial ping after brief startup delay
