@@ -91,7 +91,7 @@ class SupabaseKeepaliveWorker:
                 "latency_ms": self.last_latency_ms,
                 "timestamp": self.last_ping_at.isoformat(),
                 "pings_today_est": self.successful_pings,
-                "target_rate": f"{TARGET_REQUESTS_PER_DAY} req/day (every {self.interval_seconds}s)",
+                "target_rate": f"{TARGET_REQUESTS_PER_WEEK} req/week (every {self.interval_seconds}s)",
             }
         except Exception as e:
             latency_ms = (time.perf_counter() - t0) * 1000.0
