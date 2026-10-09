@@ -13,6 +13,7 @@ class FeatureMode(StrEnum):
     NONE = "none"
     DOCS = "docs"
     SLIDES = "slides"
+    PDF = "pdf"
     SHEETS = "sheets"
     VIDEO = "video"
     AUDIO = "audio"

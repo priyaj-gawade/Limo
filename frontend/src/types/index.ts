@@ -8,6 +8,7 @@ export type FeatureMode =
   | 'none'
   | 'docs'
   | 'slides'
+  | 'pdf'
   | 'sheets'
   | 'video'
   | 'audio'
@@ -42,6 +43,7 @@ export interface AttachmentFile {
 export type ArtifactType = 
   | 'doc' 
   | 'slide' 
+  | 'pdf'
   | 'sheet' 
   | 'video' 
   | 'audio'

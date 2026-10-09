@@ -2,6 +2,7 @@ import React from 'react';
 import {
   FileText,
   Presentation,
+  FileType,
   Table,
   Video,
   Volume2,
@@ -20,6 +21,7 @@ export const ModeBar: React.FC<ModeBarProps> = ({ activeMode, onSelectMode }) =>
   const modes: { id: FeatureMode; label: string; icon: React.ReactNode }[] = [
     { id: 'docs', label: 'Docs', icon: <FileText size={14} /> },
     { id: 'slides', label: 'Slides', icon: <Presentation size={14} /> },
+    { id: 'pdf', label: 'PDF', icon: <FileType size={14} /> },
     { id: 'sheets', label: 'Sheets', icon: <Table size={14} /> },
     { id: 'video', label: 'Video', icon: <Video size={14} /> },
     { id: 'audio', label: 'Audio', icon: <Volume2 size={14} /> },

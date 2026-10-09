@@ -813,51 +813,54 @@ class LimoAgentRuntime:
 
                 urls_to_scrape = resolution.target_urls if resolution.target_urls else ([resolution.target_url] if resolution.target_url else [])
                 for target_url in urls_to_scrape[:3]:  # bounded to top 3 URLs
-                    scrape_res = await web_content_client.scrape(target_url)
-
-                    content_bytes = scrape_res.content.encode("utf-8")
-                    content_hash = hashlib.sha256(content_bytes).hexdigest()
-                    slug = re.sub(r"[^a-zA-Z0-9_\-]+", "_", scrape_res.title or "web_article")[:40]
-
-                    # Register into D5 source repository
-                    source_record = source_service.register_file_source(
-                        filename=f"web_{slug}.md",
-                        content=content_bytes,
-                        mime_type="text/markdown",
-                        project_id=project_id,
-                        source_type=SourceType.URL,
-                        metadata={
-                            "source_url": target_url,
-                            "title": scrape_res.title,
-                            "scrape_provider": scrape_res.scrape_provider,
-                            "elapsed_seconds": scrape_res.elapsed_seconds,
-                        },
-                    )
-                    extracted_doc = await extraction_service.extract_source(source_record, content=content_bytes)
-                    norm_doc = normalization_service.normalize_extracted_document(extracted_doc)
-
-                    canon_obj = None
                     try:
-                        canon_obj = await canonical_service.canonicalize(norm_doc)
-                    except Exception as ce:
-                        logger.info("Canonicalization skipped or deferred for web URL '%s': %s", target_url, ce)
+                        scrape_res = await web_content_client.scrape(target_url)
 
-                    prov = WebSourceProvenance(
-                        url=target_url,
-                        title=scrape_res.title or target_url,
-                        domain=urllib.parse.urlparse(target_url).netloc,
-                        source_type="web_article",
-                        source_id=source_record.id,
-                        scrape_provider=scrape_res.scrape_provider,
-                        content_hash=content_hash,
-                    )
+                        content_bytes = scrape_res.content.encode("utf-8")
+                        content_hash = hashlib.sha256(content_bytes).hexdigest()
+                        slug = re.sub(r"[^a-zA-Z0-9_\-]+", "_", scrape_res.title or "web_article")[:40]
 
-                    if context.unified_input:
-                        context.unified_input.web_sources.append(prov)
-                        context.unified_input.sources.append(source_record)
-                        context.unified_input.extracted_documents.append(extracted_doc)
-                        if canon_obj:
-                            context.unified_input.canonical_contents.append(canon_obj)
+                        # Register into D5 source repository
+                        source_record = source_service.register_file_source(
+                            filename=f"web_{slug}.md",
+                            content=content_bytes,
+                            mime_type="text/markdown",
+                            project_id=project_id,
+                            source_type=SourceType.URL,
+                            metadata={
+                                "source_url": target_url,
+                                "title": scrape_res.title,
+                                "scrape_provider": scrape_res.scrape_provider,
+                                "elapsed_seconds": scrape_res.elapsed_seconds,
+                            },
+                        )
+                        extracted_doc = await extraction_service.extract_source(source_record, content=content_bytes)
+                        norm_doc = normalization_service.normalize_extracted_document(extracted_doc)
+
+                        canon_obj = None
+                        try:
+                            canon_obj = await canonical_service.canonicalize(norm_doc)
+                        except Exception as ce:
+                            logger.info("Canonicalization skipped or deferred for web URL '%s': %s", target_url, ce)
+
+                        prov = WebSourceProvenance(
+                            url=target_url,
+                            title=scrape_res.title or target_url,
+                            domain=urllib.parse.urlparse(target_url).netloc,
+                            source_type="web_article",
+                            source_id=source_record.id,
+                            scrape_provider=scrape_res.scrape_provider,
+                            content_hash=content_hash,
+                        )
+
+                        if context.unified_input:
+                            context.unified_input.web_sources.append(prov)
+                            context.unified_input.sources.append(source_record)
+                            context.unified_input.extracted_documents.append(extracted_doc)
+                            if canon_obj:
+                                context.unified_input.canonical_contents.append(canon_obj)
+                    except Exception as err:
+                        logger.warning("Scraping URL '%s' failed (anti-bot or network): %s. Continuing with turn.", target_url, err)
 
                 # Re-select context to include newly scraped article
                 if context.unified_input:
@@ -1378,10 +1381,16 @@ class LimoAgentRuntime:
                         f"The document has been verified on disk with native structure. You can view the thumbnail preview below, download it directly, or click **Edit** to open it in GenOffice."
                     )
 
+                    effective_mode = mode or (
+                        FeatureMode.PDF if target_fmt_str == "pdf"
+                        else (FeatureMode.SLIDES if target_fmt_str == "presentation"
+                        else (FeatureMode.SHEETS if target_fmt_str == "spreadsheet"
+                        else FeatureMode.DOCS))
+                    )
                     assistant_msg = self.chat_svc.add_assistant_message(
                         session_id=session_id,
                         content=content,
-                        mode=mode or FeatureMode.DOCS,
+                        mode=effective_mode,
                         artifact_ids=[artifact.id],
                         execution_summary=summary,
                     )

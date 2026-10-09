@@ -7,6 +7,7 @@ import {
   Folder,
   FileText,
   Presentation,
+  FileType,
   Table,
   Video,
   Globe,
@@ -228,6 +229,8 @@ export const Composer: React.FC<ComposerProps> = ({
         return { label: 'Docs', icon: <FileText size={13} />, placeholder: 'Describe the document, briefing, or advisory to generate...' };
       case 'slides':
         return { label: 'Slides', icon: <Presentation size={13} />, placeholder: 'Describe the presentation topic, audience, and slide count...' };
+      case 'pdf':
+        return { label: 'PDF', icon: <FileType size={13} />, placeholder: 'Describe the PDF document, report, or factsheet to generate...' };
       case 'sheets':
         return { label: 'Sheets', icon: <Table size={13} />, placeholder: 'Describe the dataset, financial model, or table to structure...' };
       case 'video':

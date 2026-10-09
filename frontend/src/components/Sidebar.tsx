@@ -5,6 +5,7 @@ import {
   Plus,
   FileText,
   Presentation,
+  FileType,
   Table,
   Video,
   Volume2,
@@ -70,6 +71,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const creationModes: { id: FeatureMode; label: string; icon: React.ReactNode; isCore: boolean }[] = [
     { id: 'docs', label: 'Docs', icon: <FileText size={17} />, isCore: true },
     { id: 'slides', label: 'Slides', icon: <Presentation size={17} />, isCore: true },
+    { id: 'pdf', label: 'PDF', icon: <FileType size={17} />, isCore: true },
     { id: 'sheets', label: 'Sheets', icon: <Table size={17} />, isCore: true },
     { id: 'video', label: 'Video', icon: <Video size={17} />, isCore: true },
     { id: 'audio', label: 'Audio', icon: <Volume2 size={17} />, isCore: true },

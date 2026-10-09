@@ -440,7 +440,7 @@ class IntentResolver:
                 d_lower,
             )
             or re.search(r"\b(?:read\s+(?:this\s+)?aloud|read\s+aloud|synthesize\s+(?:speech|voice|audio)|narrate\s+this)\b", d_lower)
-        ) or mode_str in ("docs", "slides", "sheets", "video", "audio", "infographic", "poster", "image")
+        ) or mode_str in ("docs", "slides", "pdf", "sheets", "video", "audio", "infographic", "poster", "image")
 
         # Pure Conversational Web Reach Turns (No Deliverable Command)
         if not has_deliverable_command:
@@ -527,7 +527,7 @@ class IntentResolver:
                 r"^(what|why|who|where|which|when)\s+(?:is|are|was|were|do|does|did|would|could|can|to|did\s+they|should|will)\b",
                 d_lower,
             )
-            or re.match(r"^(tell\s+me\s+about|can\s+you\s+tell\s+me|explain\s+(?:what|why|how)|can\s+you\s+explain\s+(?:what|why|how))\b", d_lower)
+            or re.match(r"^(tell\s+me\s+(?:about|what|which|who|why|how)|can\s+you\s+tell\s+me|explain\s+(?:what|why|how)|can\s+you\s+explain\s+(?:what|why|how))\b", d_lower)
         )
         # Exclude polite generation commands like "Can you create a PDF...", "Could you make a document..."
         is_polite_generation_command = bool(
@@ -714,10 +714,11 @@ class IntentResolver:
         # Format explicitly requested in text (e.g. Markdown, PDF, Slides) overrides mode.
         # Strict isolation: Audio mode NEVER produces Video, Video mode NEVER produces Audio.
         # -------------------------------------------------------------------
-        if mode_str in ("docs", "slides", "sheets", "video", "audio", "infographic", "poster", "image"):
+        if mode_str in ("docs", "slides", "pdf", "sheets", "video", "audio", "infographic", "poster", "image"):
             mode_to_fmt = {
                 "docs": TargetFormat.DOCUMENT,
                 "slides": TargetFormat.PRESENTATION,
+                "pdf": TargetFormat.PDF,
                 "sheets": TargetFormat.SPREADSHEET,
                 "video": TargetFormat.VIDEO,
                 "audio": TargetFormat.AUDIO,
@@ -756,6 +757,17 @@ class IntentResolver:
                     target_f = TargetFormat.DOCUMENT
                 else:
                     target_f = TargetFormat.VIDEO
+            elif mode_str == "pdf":
+                if re.search(r"\b(?:create|generate|make|export)\s+(?:a\s+|an\s+)?(?:markdown\s+document|md\s+file)\b", d_lower):
+                    target_f = TargetFormat.MARKDOWN
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:presentations?|slide\s+deck|slides?)\b", d_lower):
+                    target_f = TargetFormat.PRESENTATION
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:spreadsheets?|sheets?|xlsx|excel\s+sheet)\b", d_lower):
+                    target_f = TargetFormat.SPREADSHEET
+                elif re.search(r"\b(?:create|generate|make)\s+(?:a\s+|an\s+)?(?:documents?|docx?)\b", d_lower):
+                    target_f = TargetFormat.DOCUMENT
+                else:
+                    target_f = TargetFormat.PDF
             else:
                 # Other modes: require explicit creation verb so content words don't hijack
                 if re.search(r"\b(?:create|generate|make|export)\s+(?:a\s+|an\s+)?(?:markdown\s+document|md\s+file)\b", d_lower):
@@ -964,8 +976,8 @@ class IntentResolver:
                 ),
             )
 
-        # Unambiguous Deliverable Generation
-        if len(detected_formats) == 1 and (has_creation_command or has_format_keyword):
+        # Unambiguous Deliverable Generation (requires explicit creation command)
+        if len(detected_formats) == 1 and has_creation_command:
             fmt = detected_formats[0]
             if fmt == TargetFormat.INFOGRAPHIC and explicit_ratio_requested and explicit_ratio_requested not in ("3:4", "9:16", "16:9", "1:1", "4:3"):
                 raise BadRequestError(

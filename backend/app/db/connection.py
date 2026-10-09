@@ -202,7 +202,7 @@ def get_connection(
             raise RuntimeError(
                 "psycopg is required for web deployment with PostgreSQL. Install psycopg[binary]."
             )
-        raw_conn = psycopg.connect(pg_url, row_factory=dict_row)
+        raw_conn = psycopg.connect(pg_url, row_factory=dict_row, prepare_threshold=None)
         conn = LimoConnection(raw_conn, is_postgres=True)
         try:
             yield conn

@@ -1857,9 +1857,12 @@ function ensureDefaultContentType(archive: PackageArchive, ext: string, contentT
   const ct = archive.readText(ctPath)
   if (!ct) return
   if (new RegExp(`<Default\\s[^>]*Extension="${ext}"`, 'i').test(ct)) return
-  // Insert the Default after the root <Types …> open tag (after the first >)
+  // Insert the Default after the root <Types ...> open tag (NOT after <?xml ... ?>)
   const def = `<Default Extension="${ext}" ContentType="${contentType}"/>`
-  const at = ct.indexOf('>') + 1
+  const typesIdx = ct.indexOf('<Types')
+  if (typesIdx === -1) return
+  const at = ct.indexOf('>', typesIdx) + 1
+  if (at <= 0) return
   archive.entries.set(ctPath, Buffer.from(ct.slice(0, at) + def + ct.slice(at), 'utf8'))
 }
 

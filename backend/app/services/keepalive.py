@@ -68,7 +68,7 @@ class SupabaseKeepaliveWorker:
             import psycopg
             # Clean psycopg connection string (convert postgresql+psycopg:// to postgresql:// if needed)
             clean_url = target_url.replace("postgresql+psycopg://", "postgresql://")
-            with psycopg.connect(clean_url, connect_timeout=4) as conn:
+            with psycopg.connect(clean_url, connect_timeout=4, prepare_threshold=None) as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1 AS keepalive_ping, NOW() AS server_time;")
                     row = cur.fetchone()
