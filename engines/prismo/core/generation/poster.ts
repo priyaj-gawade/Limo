@@ -597,7 +597,7 @@ Ensure .poster-artboard has width: ${width}px; height: ${height}px; overflow: hi
 
     // Dynamic Asset Resolution & Local Caching (honoring imageIntent and canvas geometry)
     let stockProvidersUsed: string[] = [];
-    if (this.assetManager && htmlContent && study.imageIntent !== 'image_not_wanted') {
+    if (htmlContent && (study.imageIntent !== 'image_not_wanted' || /<img\b[^>]*\bsrc=["']asset:[^"']+["']/i.test(htmlContent))) {
       const assetRes = await this.resolveDynamicAssets(input.projectId, projectRoot, htmlContent, activeRatioState);
       if (assetRes.html !== htmlContent) {
         htmlContent = assetRes.html;
@@ -706,6 +706,16 @@ FIX INSTRUCTIONS:
         if (corrFiles['index.html']) {
           htmlContent = corrFiles['index.html'];
           this.workspaceManager.writeFile(input.projectId, 'index.html', htmlContent);
+
+          // Immediately resolve dynamic assets for newly re-authored HTML
+          const assetRes = await this.resolveDynamicAssets(input.projectId, projectRoot, htmlContent, activeRatioState);
+          if (assetRes.html !== htmlContent) {
+            htmlContent = assetRes.html;
+            this.workspaceManager.writeFile(input.projectId, 'index.html', htmlContent);
+          }
+          if (assetRes.usedProviders.length > 0) {
+            stockProvidersUsed = Array.from(new Set([...stockProvidersUsed, ...assetRes.usedProviders]));
+          }
         }
         if (corrFiles['styles.css']) {
           cssContent = corrFiles['styles.css'];
@@ -735,13 +745,26 @@ FIX INSTRUCTIONS:
           `$1\n    <div class="poster-focal-frame" data-od-id="hero-image">\n      <img class="poster-bleed-image" src="asset:${assetQuery}" alt="${input.prompt}">\n    </div>`
         );
         this.workspaceManager.writeFile(input.projectId, 'index.html', htmlContent);
-        if (this.assetManager) {
-          const assetRes = await this.resolveDynamicAssets(input.projectId, projectRoot, htmlContent, activeRatioState);
-          if (assetRes.html !== htmlContent) {
-            htmlContent = assetRes.html;
-            this.workspaceManager.writeFile(input.projectId, 'index.html', htmlContent);
-          }
+        const assetRes = await this.resolveDynamicAssets(input.projectId, projectRoot, htmlContent, activeRatioState);
+        if (assetRes.html !== htmlContent) {
+          htmlContent = assetRes.html;
+          this.workspaceManager.writeFile(input.projectId, 'index.html', htmlContent);
         }
+        if (assetRes.usedProviders.length > 0) {
+          stockProvidersUsed = Array.from(new Set([...stockProvidersUsed, ...assetRes.usedProviders]));
+        }
+      }
+    }
+
+    // Guaranteed Asset Safety Sweep: Never permit raw asset: pseudoprotocol to reach Headless Chromium
+    if (/<img\b[^>]*\bsrc=["']asset:[^"']+["']/i.test(htmlContent)) {
+      const assetRes = await this.resolveDynamicAssets(input.projectId, projectRoot, htmlContent, activeRatioState);
+      if (assetRes.html !== htmlContent) {
+        htmlContent = assetRes.html;
+        this.workspaceManager.writeFile(input.projectId, 'index.html', htmlContent);
+      }
+      if (assetRes.usedProviders.length > 0) {
+        stockProvidersUsed = Array.from(new Set([...stockProvidersUsed, ...assetRes.usedProviders]));
       }
     }
 
@@ -1067,7 +1090,6 @@ FIX INSTRUCTIONS:
   ): Promise<{ html: string; usedProviders: string[] }> {
     let resolvedHtml = html;
     const usedProviders: string[] = [];
-    if (!this.assetManager) return { html, usedProviders };
 
     const assetRegex = /<img\b([^>]*?)\bsrc=["']asset:([^"']+)["']([^>]*?)>/gi;
     const matches = Array.from(resolvedHtml.matchAll(assetRegex));
@@ -1075,9 +1097,6 @@ FIX INSTRUCTIONS:
     if (matches.length === 0) {
       return { html, usedProviders };
     }
-
-    const assetsDir = path.join(projectRoot, 'assets');
-    fs.mkdirSync(assetsDir, { recursive: true });
 
     const activeRatio = activeRatioState?.ratio || '3:4';
     const canvasOrientation = getOrientationForRatio(activeRatio);
@@ -1089,6 +1108,18 @@ FIX INSTRUCTIONS:
     } else {
       defaultHeroOrientation = 'portrait';
     }
+
+    if (!this.assetManager) {
+      // Safety: If assetManager is not wired, replace all asset: placeholders with generative SVG
+      resolvedHtml = resolvedHtml.replace(assetRegex, (_fullMatch, preAttrs, rawQuery, postAttrs) => {
+        const fallbackUri = this.createGenerativeSvgDataUri(rawQuery.trim(), defaultHeroOrientation);
+        return `<img ${preAttrs}src="${fallbackUri}"${postAttrs}>`;
+      });
+      return { html: resolvedHtml, usedProviders };
+    }
+
+    const assetsDir = path.join(projectRoot, 'assets');
+    fs.mkdirSync(assetsDir, { recursive: true });
 
     for (const match of matches) {
       const fullImgTag = match[0];
@@ -1119,9 +1150,23 @@ FIX INSTRUCTIONS:
         if (searchResult.assets.length > 0) {
           const topAsset = searchResult.assets[0];
           const downloadedPath = await this.assetManager.downloadAsset(topAsset, assetsDir);
-          const relPath = path.relative(projectRoot, downloadedPath).replace(/\\/g, '/');
+          let finalSrc = path.relative(projectRoot, downloadedPath).replace(/\\/g, '/');
 
-          resolvedHtml = resolvedHtml.replace(fullImgTag, `<img ${preAttrs}src="${relPath}"${postAttrs}>`);
+          // Inline as base64 data URI if file exists and <= 4MB for deterministic headless rendering
+          try {
+            if (fs.existsSync(downloadedPath)) {
+              const buffer = fs.readFileSync(downloadedPath);
+              if (buffer.length > 0 && buffer.length <= 4 * 1024 * 1024) {
+                const ext = path.extname(downloadedPath).toLowerCase().replace('.', '');
+                const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+                finalSrc = `data:${mime};base64,${buffer.toString('base64')}`;
+              }
+            }
+          } catch (readErr) {
+            console.warn('[PosterEngine] Could not inline downloaded asset as base64, using relative path:', readErr);
+          }
+
+          resolvedHtml = resolvedHtml.replace(fullImgTag, `<img ${preAttrs}src="${finalSrc}"${postAttrs}>`);
           if (!usedProviders.includes(topAsset.provider)) {
             usedProviders.push(topAsset.provider);
           }
